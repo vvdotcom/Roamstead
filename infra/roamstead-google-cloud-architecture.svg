@@ -1,0 +1,339 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1125" viewBox="0 0 2000 1125" role="img" aria-labelledby="title desc">
+  <title id="title">Roamstead Google Cloud production architecture</title>
+  <desc id="desc">Production architecture for Roamstead showing users, Google Cloud edge security, Cloud Run web and API services, Gemini, Gemini Embedding, two Gemma critics, Firestore vector memory, Cloud Storage, a weekly real listing pipeline, delivery, secrets, and operations.</desc>
+  <defs>
+    <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f4f8ff"/>
+    </linearGradient>
+    <linearGradient id="cloudPanel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f8fbff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#16324f" flood-opacity="0.11"/>
+    </filter>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#16324f" flood-opacity="0.10"/>
+    </filter>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.5" fill="#4285f4" opacity="0.08"/>
+    </pattern>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4285f4"/>
+    </marker>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7e57c2"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f29900"/>
+    </marker>
+    <marker id="arrowGrey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#78909c"/>
+    </marker>
+    <style>
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; }
+      .eyebrow { font-size: 13px; font-weight: 800; letter-spacing: 2.2px; }
+      .zone-title { font-size: 14px; font-weight: 800; letter-spacing: 1.5px; fill: #58718a; }
+      .card-title { font-size: 18px; font-weight: 750; fill: #17324d; }
+      .card-copy { font-size: 14px; font-weight: 500; fill: #61778d; }
+      .card-small { font-size: 12.5px; font-weight: 550; fill: #6c8297; }
+      .edge { fill: none; stroke: #4285f4; stroke-width: 3.2; marker-end: url(#arrowBlue); }
+      .model-edge { fill: none; stroke: #7e57c2; stroke-width: 3.2; marker-end: url(#arrowPurple); }
+      .scheduled { fill: none; stroke: #f29900; stroke-width: 3; stroke-dasharray: 10 8; marker-end: url(#arrowOrange); }
+      .ops-edge { fill: none; stroke: #78909c; stroke-width: 2.6; stroke-dasharray: 3 7; marker-end: url(#arrowGrey); }
+      .policy { fill: none; stroke: #ea4335; stroke-width: 2.8; stroke-dasharray: 9 7; marker-end: url(#arrowGrey); }
+      .flow-label { font-size: 12px; font-weight: 750; fill: #506b84; letter-spacing: .2px; }
+      .badge-text { font-size: 13px; font-weight: 850; fill: white; text-anchor: middle; dominant-baseline: middle; letter-spacing: .4px; }
+    </style>
+  </defs>
+
+  <rect width="2000" height="1125" fill="url(#canvas)"/>
+  <rect x="0" y="0" width="2000" height="1125" fill="url(#dots)"/>
+
+  <!-- Header -->
+  <g>
+    <circle cx="46" cy="43" r="8" fill="#4285f4"/>
+    <circle cx="66" cy="43" r="8" fill="#ea4335"/>
+    <circle cx="46" cy="63" r="8" fill="#fbbc05"/>
+    <circle cx="66" cy="63" r="8" fill="#34a853"/>
+    <text x="91" y="39" class="eyebrow" fill="#4285f4">ROAMSTEAD</text>
+    <text x="91" y="74" font-size="31" font-weight="780" fill="#17324d">Google Cloud production architecture</text>
+    <text x="91" y="102" font-size="15" font-weight="500" fill="#6a8094">Multi-city collaborative cross-border housing decision agent</text>
+    <rect x="1670" y="39" width="280" height="45" rx="22.5" fill="#e8f0fe" stroke="#a9c7f7"/>
+    <circle cx="1696" cy="61.5" r="6" fill="#34a853"/>
+    <text x="1712" y="66" font-size="14" font-weight="750" fill="#285d47">PRODUCTION · us-central1</text>
+  </g>
+
+  <!-- Google Cloud boundary -->
+  <rect x="270" y="135" width="1680" height="930" rx="28" fill="url(#cloudPanel)" stroke="#4285f4" stroke-width="3" filter="url(#shadow)"/>
+  <rect x="286" y="151" width="1648" height="898" rx="20" fill="none" stroke="#d7e5f7" stroke-width="1.5"/>
+  <g transform="translate(310 164)">
+    <path d="M18 38h54c13 0 23-9 23-21S86-3 74-4C69-19 55-29 38-29 20-29 6-18 2-2-10 0-18 9-18 20c0 10 8 18 18 18z" transform="scale(.42) translate(43 72)" fill="#4285f4" opacity=".18"/>
+    <text x="0" y="29" font-size="21" font-weight="760" fill="#324b65">Google Cloud Platform</text>
+  </g>
+
+  <!-- Connection paths, deliberately behind service cards -->
+  <g aria-label="architecture connections">
+    <path class="edge" d="M235 345 H305 V310 H335"/>
+    <path class="edge" d="M445 352 V530"/>
+    <path class="policy" d="M520 430 V487 H474"/>
+    <path class="edge" d="M555 568 H700 V352 H750"/>
+    <path class="edge" d="M980 425 V500"/>
+    <path class="model-edge" d="M1210 574 H1262 V292 H1335"/>
+    <path class="model-edge" d="M1460 336 V350"/>
+    <path class="model-edge" d="M1585 389 H1620"/>
+    <path class="model-edge" d="M1748 350 V336"/>
+    <path class="model-edge" d="M1748 428 V462 H1278 V622 H1210"/>
+    <path class="model-edge" d="M1875 292 H1925 V475 H1460 V555"/>
+    <path class="edge" d="M1210 615 H1272 V574 H1335"/>
+    <path class="edge" d="M1210 650 H1288 V685 H1620"/>
+    <path class="scheduled" d="M535 915 H560"/>
+    <path class="scheduled" d="M785 915 H810"/>
+    <path class="scheduled" d="M672 850 V770 H1445 V685 H1620"/>
+    <path class="scheduled" d="M700 850 V785 H1428 V574 H1335"/>
+    <path class="policy" d="M1115 850 V735 H1165 V660"/>
+    <path class="policy" d="M1078 850 V812 H750 V915 H785"/>
+    <path class="ops-edge" d="M1315 915 H1425"/>
+    <path class="ops-edge" d="M1540 850 V805 H1010 V500"/>
+    <path class="ops-edge" d="M1640 915 H1605"/>
+    <path class="ops-edge" d="M865 680 V1018 H1750 V975"/>
+    <path class="ops-edge" d="M785 950 H1640"/>
+    <path class="edge" d="M122 430 V540"/>
+  </g>
+
+  <!-- External actors -->
+  <g filter="url(#softShadow)">
+    <rect x="30" y="255" width="205" height="175" rx="20" fill="#fff" stroke="#cbd9e8" stroke-width="2"/>
+    <rect x="68" y="286" width="96" height="58" rx="7" fill="#e8f0fe" stroke="#4285f4" stroke-width="3"/>
+    <rect x="104" y="345" width="24" height="8" rx="4" fill="#4285f4"/>
+    <rect x="177" y="300" width="25" height="48" rx="6" fill="#fff" stroke="#4285f4" stroke-width="3"/>
+    <circle cx="189.5" cy="340" r="2" fill="#4285f4"/>
+    <text x="132.5" y="380" text-anchor="middle" class="eyebrow" fill="#4285f4">BUYERS &amp; RENTERS</text>
+    <text x="132.5" y="405" text-anchor="middle" font-size="15" font-weight="600" fill="#526c84">Desktop + mobile</text>
+  </g>
+  <g filter="url(#softShadow)">
+    <rect x="30" y="540" width="205" height="155" rx="20" fill="#fff" stroke="#cbd9e8" stroke-width="2"/>
+    <circle cx="132.5" cy="584" r="25" fill="#fce8e6"/>
+    <path d="M132.5 568c-9 0-16 7-16 16 0 12 16 29 16 29s16-17 16-29c0-9-7-16-16-16zm0 22a7 7 0 1 1 0-14 7 7 0 0 1 0 14z" fill="#ea4335"/>
+    <text x="132.5" y="640" text-anchor="middle" class="eyebrow" fill="#ea4335">GOOGLE MAPS</text>
+    <text x="132.5" y="665" text-anchor="middle" font-size="14" font-weight="600" fill="#526c84">Maps JS · Geocoding</text>
+  </g>
+
+  <!-- Edge zone -->
+  <g>
+    <rect x="310" y="205" width="350" height="555" rx="20" fill="#f8fbff" stroke="#c7d9ee" stroke-width="2"/>
+    <text x="335" y="238" class="zone-title">GLOBAL EDGE &amp; SECURITY</text>
+
+    <g filter="url(#softShadow)">
+      <rect x="335" y="260" width="300" height="92" rx="16" fill="#fff" stroke="#bfd3ee"/>
+      <polygon points="365,276 395,276 410,306 395,336 365,336 350,306" fill="#4285f4"/>
+      <text x="380" y="307" class="badge-text">DNS</text>
+      <text x="430" y="295" class="card-title">Cloud DNS</text>
+      <text x="430" y="320" class="card-copy">Roamstead domain</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="335" y="385" width="300" height="92" rx="16" fill="#fff" stroke="#efc2bd"/>
+      <path d="M380 400l27 10v20c0 18-12 28-27 34-15-6-27-16-27-34v-20z" fill="#ea4335"/>
+      <path d="M380 412v38" stroke="#fff" stroke-width="4"/>
+      <path d="M365 431h30" stroke="#fff" stroke-width="4"/>
+      <text x="430" y="420" class="card-title">Cloud Armor</text>
+      <text x="430" y="445" class="card-copy">WAF · rate policies</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="335" y="520" width="300" height="110" rx="16" fill="#fff" stroke="#bfd3ee"/>
+      <polygon points="365,539 395,539 410,569 395,599 365,599 350,569" fill="#4285f4"/>
+      <path d="M364 559h32M364 569h32M364 579h32" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+      <text x="430" y="558" class="card-title">HTTPS Load Balancer</text>
+      <text x="430" y="583" class="card-copy">Managed TLS · global</text>
+      <text x="430" y="605" class="card-small">Serverless network endpoint</text>
+    </g>
+    <rect x="335" y="670" width="300" height="58" rx="12" fill="#eef5ff" stroke="#d5e4f6"/>
+    <text x="355" y="694" font-size="13" font-weight="750" fill="#3f6388">Public entry point</text>
+    <text x="355" y="714" class="card-small">Only the web service is internet-facing</text>
+  </g>
+
+  <!-- Serverless application zone -->
+  <g>
+    <rect x="700" y="205" width="560" height="555" rx="20" fill="#f6faff" stroke="#a9c8f3" stroke-width="2"/>
+    <text x="725" y="238" class="zone-title">SERVERLESS APPLICATION · US-CENTRAL1</text>
+    <g filter="url(#softShadow)">
+      <rect x="750" y="275" width="460" height="150" rx="18" fill="#fff" stroke="#afc9ec" stroke-width="1.5"/>
+      <polygon points="785,299 825,299 845,339 825,379 785,379 765,339" fill="#4285f4"/>
+      <path d="M783 352l20-26 18 14 8-12" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="803" cy="326" r="4" fill="#fff"/>
+      <text x="870" y="316" class="eyebrow" fill="#4285f4">CLOUD RUN · ROAMSTEAD-WEB</text>
+      <text x="870" y="347" font-size="22" font-weight="780" fill="#17324d">Next.js 16 + React 19</text>
+      <text x="870" y="374" class="card-copy">Responsive experience · Maps · REST/SSE proxy</text>
+      <rect x="870" y="389" width="105" height="22" rx="11" fill="#e8f0fe"/>
+      <text x="922" y="404" text-anchor="middle" font-size="11" font-weight="750" fill="#2f63aa">NO SECRETS</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="750" y="500" width="460" height="200" rx="18" fill="#fff" stroke="#afc9ec" stroke-width="1.5"/>
+      <polygon points="785,526 825,526 845,566 825,606 785,606 765,566" fill="#4285f4"/>
+      <path d="M793 548l-12 18 12 18M817 548l12 18-12 18" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="870" y="541" class="eyebrow" fill="#4285f4">CLOUD RUN · ROAMSTEAD-API</text>
+      <text x="870" y="572" font-size="22" font-weight="780" fill="#17324d">FastAPI + Google ADK</text>
+      <text x="870" y="599" class="card-copy">PartnerCoordinator orchestrates specialists</text>
+      <text x="870" y="624" class="card-copy">Durable SSE events · resumable Decision Briefs</text>
+      <rect x="870" y="650" width="166" height="25" rx="12.5" fill="#e6f4ea"/>
+      <text x="953" y="667" text-anchor="middle" font-size="11.5" font-weight="750" fill="#27763e">DETERMINISTIC FIT SCORE</text>
+      <rect x="1045" y="650" width="135" height="25" rx="12.5" fill="#fef7e0"/>
+      <text x="1112" y="667" text-anchor="middle" font-size="11.5" font-weight="750" fill="#8d6800">HARD FILTERS</text>
+    </g>
+    <rect x="840" y="451" width="280" height="28" rx="14" fill="#e8f0fe"/>
+    <text x="980" y="470" text-anchor="middle" class="flow-label">REST + RESUMABLE SERVER-SENT EVENTS</text>
+  </g>
+
+  <!-- Google AI zone -->
+  <g>
+    <rect x="1300" y="205" width="610" height="250" rx="20" fill="#fbf8ff" stroke="#ccbbed" stroke-width="2"/>
+    <text x="1325" y="238" class="zone-title" fill="#6942a5">GOOGLE AI · ADK SPECIALISTS</text>
+    <g filter="url(#softShadow)">
+      <rect x="1335" y="258" width="250" height="78" rx="14" fill="#fff" stroke="#d7c8f1"/>
+      <circle cx="1363" cy="287" r="18" fill="#7e57c2"/>
+      <path d="M1363 274l3.5 9.5 9.5 3.5-9.5 3.5-3.5 9.5-3.5-9.5-9.5-3.5 9.5-3.5z" fill="#fff"/>
+      <text x="1390" y="282" font-size="17" font-weight="780" fill="#17324d">Gemini 3.5 Flash</text>
+      <text x="1390" y="307" class="card-small">Analyze · verify · compose</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1620" y="258" width="255" height="78" rx="14" fill="#fff" stroke="#d7c8f1"/>
+      <circle cx="1648" cy="287" r="18" fill="#7e57c2"/>
+      <path d="M1639 278h18v18h-18zM1643 283h10M1643 288h10M1643 293h7" fill="none" stroke="#fff" stroke-width="2"/>
+      <text x="1675" y="282" font-size="16" font-weight="780" fill="#17324d">Gemini Embedding 001</text>
+      <text x="1675" y="307" class="card-small">768d semantic memory · cosine KNN</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1335" y="350" width="250" height="78" rx="14" fill="#fff" stroke="#d7c8f1"/>
+      <circle cx="1363" cy="389" r="18" fill="#7e57c2"/>
+      <circle cx="1363" cy="389" r="10" fill="none" stroke="#fff" stroke-width="3"/>
+      <circle cx="1363" cy="389" r="3" fill="#fff"/>
+      <text x="1390" y="382" font-size="16" font-weight="780" fill="#17324d">Gemma 4 · 26B</text>
+      <text x="1390" y="404" class="card-small">VisualEvidenceCritic · real photos</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1620" y="350" width="255" height="78" rx="14" fill="#fff" stroke="#d7c8f1"/>
+      <circle cx="1648" cy="389" r="18" fill="#7e57c2"/>
+      <path d="M1639 389l6 6 12-14" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1675" y="382" font-size="16" font-weight="780" fill="#17324d">Gemma 4 · 31B</text>
+      <text x="1675" y="404" class="card-small">MemoryConsistencyCritic · approval-safe</text>
+    </g>
+  </g>
+
+  <!-- Durable data zone -->
+  <g>
+    <rect x="1300" y="500" width="610" height="250" rx="20" fill="#f7fbff" stroke="#b8d1ec" stroke-width="2"/>
+    <text x="1325" y="533" class="zone-title">DURABLE DATA &amp; VERIFIED EVIDENCE</text>
+    <g filter="url(#softShadow)">
+      <rect x="1335" y="555" width="250" height="150" rx="16" fill="#fff" stroke="#bfd3ee"/>
+      <polygon points="1364,575 1396,575 1412,607 1396,639 1364,639 1348,607" fill="#4285f4"/>
+      <path d="M1362 595h36v24h-36zM1362 607h36M1374 595v24M1386 595v24" fill="none" stroke="#fff" stroke-width="3"/>
+      <text x="1428" y="592" class="card-title">Firestore Native</text>
+      <text x="1428" y="617" class="card-copy">Persistent + vector memory</text>
+      <text x="1355" y="666" class="card-small">Profiles · semantic memory · 768d index</text>
+      <text x="1355" y="685" class="card-small">listings · runs/events · audits · briefs</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1620" y="555" width="255" height="150" rx="16" fill="#fff" stroke="#bfd3ee"/>
+      <polygon points="1650,575 1682,575 1698,607 1682,639 1650,639 1634,607" fill="#4285f4"/>
+      <path d="M1649 594h34v27h-34zM1654 615l8-8 7 6 6-5 8 8" fill="none" stroke="#fff" stroke-width="3"/>
+      <circle cx="1677" cy="600" r="3" fill="#fff"/>
+      <text x="1712" y="592" class="card-title">Cloud Storage</text>
+      <text x="1712" y="617" class="card-copy">Private image objects</text>
+      <text x="1640" y="666" class="card-small">Verified real listing photos</text>
+      <text x="1640" y="685" class="card-small">Source attribution · no substitutes</text>
+    </g>
+  </g>
+
+  <!-- Automation, delivery, and operations zone -->
+  <g>
+    <rect x="310" y="795" width="1600" height="235" rx="20" fill="#fbfcfd" stroke="#d1dbe5" stroke-width="2"/>
+    <text x="335" y="828" class="zone-title">AUTOMATION, DELIVERY &amp; OPERATIONS</text>
+
+    <g filter="url(#softShadow)">
+      <rect x="335" y="850" width="200" height="125" rx="15" fill="#fff" stroke="#f0d180"/>
+      <circle cx="375" cy="891" r="24" fill="#fbbc05"/>
+      <circle cx="375" cy="891" r="14" fill="none" stroke="#fff" stroke-width="3"/>
+      <path d="M375 891v-9M375 891l8 5" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+      <text x="410" y="882" class="card-title">Cloud Scheduler</text>
+      <text x="410" y="906" class="card-small">Weekly trigger</text>
+      <text x="355" y="949" class="card-small">Monday · 09:00 UTC</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="560" y="850" width="225" height="125" rx="15" fill="#fff" stroke="#a8d5b4"/>
+      <circle cx="600" cy="891" r="24" fill="#34a853"/>
+      <path d="M588 886a14 14 0 0 1 23-6l5-5v14h-14l5-5M612 896a14 14 0 0 1-23 6l-5 5v-14h14l-5 5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="635" y="882" class="card-title">Cloud Run Job</text>
+      <text x="635" y="906" class="card-small">Real catalog refresh</text>
+      <text x="580" y="949" class="card-small">Gemini-grounded · atomic writes</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="810" y="850" width="190" height="125" rx="15" fill="#fff" stroke="#f0d180"/>
+      <circle cx="850" cy="891" r="24" fill="#fbbc05"/>
+      <path d="M840 882c9 0 17 7 17 17M840 890c5 0 9 4 9 9M840 898h1" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+      <text x="885" y="882" class="card-title">Pub/Sub</text>
+      <text x="885" y="906" class="card-small">Pipeline status</text>
+      <text x="830" y="949" class="card-small">Completion · failure</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1025" y="850" width="180" height="125" rx="15" fill="#fff" stroke="#efc2bd"/>
+      <circle cx="1065" cy="891" r="24" fill="#ea4335"/>
+      <circle cx="1059" cy="889" r="8" fill="none" stroke="#fff" stroke-width="3"/>
+      <path d="M1066 895l12 12M1073 901l5-5M1078 906l5-5" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+      <text x="1100" y="882" class="card-title">Secret</text>
+      <text x="1100" y="904" class="card-title">Manager</text>
+      <text x="1045" y="949" class="card-small">AI credential</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1230" y="850" width="185" height="125" rx="15" fill="#fff" stroke="#bfd3ee"/>
+      <circle cx="1270" cy="891" r="24" fill="#4285f4"/>
+      <path d="M1259 901l10-22 6 13 8-4-11 19-5-12z" fill="#fff"/>
+      <text x="1305" y="882" class="card-title">Cloud Build</text>
+      <text x="1305" y="906" class="card-small">Test + build</text>
+      <text x="1250" y="949" class="card-small">Reproducible CI</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1440" y="850" width="175" height="125" rx="15" fill="#fff" stroke="#bfd3ee"/>
+      <circle cx="1480" cy="891" r="24" fill="#4285f4"/>
+      <path d="M1480 876l14 8v16l-14 8-14-8v-16zM1466 884l14 8 14-8M1480 892v16" fill="none" stroke="#fff" stroke-width="3"/>
+      <text x="1515" y="882" class="card-title">Artifact</text>
+      <text x="1515" y="904" class="card-title">Registry</text>
+      <text x="1460" y="949" class="card-small">Immutable images</text>
+    </g>
+    <g filter="url(#softShadow)">
+      <rect x="1640" y="850" width="235" height="125" rx="15" fill="#fff" stroke="#a8d5b4"/>
+      <circle cx="1680" cy="891" r="24" fill="#34a853"/>
+      <path d="M1667 902v-12M1680 902v-23M1693 902v-17" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+      <text x="1715" y="882" class="card-title">Logging +</text>
+      <text x="1715" y="904" class="card-title">Monitoring</text>
+      <text x="1660" y="949" class="card-small">Traces · alerts · audit proof</text>
+    </g>
+  </g>
+
+  <!-- Flow labels placed last for clarity -->
+  <g>
+    <rect x="252" y="296" width="93" height="24" rx="12" fill="#e8f0fe"/>
+    <text x="298" y="313" text-anchor="middle" class="flow-label">HTTPS</text>
+    <rect x="581" y="462" width="120" height="24" rx="12" fill="#fce8e6"/>
+    <text x="641" y="479" text-anchor="middle" class="flow-label" fill="#a63b31">PROTECTS</text>
+    <rect x="1241" y="250" width="111" height="24" rx="12" fill="#f3edff"/>
+    <text x="1296" y="267" text-anchor="middle" class="flow-label" fill="#65409a">ADK CALLS</text>
+    <rect x="1452" y="437" width="226" height="24" rx="12" fill="#f3edff"/>
+    <text x="1565" y="454" text-anchor="middle" class="flow-label" fill="#65409a">SUPPORT / CHALLENGE / CORRECT</text>
+    <rect x="456" y="994" width="345" height="22" rx="11" fill="#fff7e0"/>
+    <text x="628" y="1009" text-anchor="middle" class="flow-label" fill="#8a6500">WEEKLY REAL-DATA PIPELINE · NO SYNTHETIC LISTINGS</text>
+  </g>
+
+  <!-- Footer legend -->
+  <g transform="translate(30 1087)">
+    <path d="M0 0h44" stroke="#4285f4" stroke-width="4"/>
+    <text x="54" y="5" font-size="12.5" font-weight="650" fill="#60778d">Live request + model flow</text>
+    <path d="M250 0h44" stroke="#f29900" stroke-width="4" stroke-dasharray="10 7"/>
+    <text x="304" y="5" font-size="12.5" font-weight="650" fill="#60778d">Scheduled catalog flow</text>
+    <path d="M500 0h44" stroke="#78909c" stroke-width="4" stroke-dasharray="3 7"/>
+    <text x="554" y="5" font-size="12.5" font-weight="650" fill="#60778d">Delivery + operations</text>
+    <circle cx="815" cy="0" r="6" fill="#34a853"/>
+    <text x="830" y="5" font-size="12.5" font-weight="700" fill="#315f44">Persistent, approval-controlled, evidence-backed</text>
+    <text x="1920" y="5" text-anchor="end" font-size="12.5" font-weight="650" fill="#7890a6">Architecture · v1.1 · 23 Aug 2026</text>
+  </g>
+</svg>

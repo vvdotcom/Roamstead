@@ -1,0 +1,26 @@
+services:
+  api:
+    build: ./apps/api
+    ports:
+      - "8000:8080"
+    environment:
+      PORT: "8080"
+      PERSISTENCE_BACKEND: sqlite
+      ROAMSTEAD_DATABASE_PATH: /app/data/roamstead.db
+      ENABLE_WEEKLY_LISTING_REFRESH: "0"
+    volumes:
+      - ./data:/app/data
+  web:
+    build:
+      context: ./apps/web
+      args:
+        API_URL: http://api:8080
+        NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${ROAMSTEAD_MAPS_BROWSER_API_KEY:-}
+        NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID: ${ROAMSTEAD_MAPS_MAP_ID:-}
+    ports:
+      - "3000:8080"
+    environment:
+      PORT: "8080"
+      API_URL: http://api:8080
+    depends_on:
+      - api
