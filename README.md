@@ -136,6 +136,10 @@ $env:ROAMSTEAD_MAPS_MAP_ID="YOUR_OPTIONAL_MAP_ID"
 
 The script builds and deploys separate API and web Cloud Run services, creates least-privilege service accounts, a private listing-image bucket, Pub/Sub topic, weekly catalog Cloud Run Job, and Cloud Scheduler trigger. It intentionally refuses to choose a Firestore location or place a Gemini key on the command line.
 
+### Automatic deployment
+
+Pushes to `main` run [cloudbuild.yaml](cloudbuild.yaml). The pipeline runs the API and web tests, builds commit-tagged containers, pushes them to the `roamstead` Artifact Registry repository, deploys both existing Cloud Run services, and checks the public API and web URLs. It uses the dedicated `roamstead-builder` service account and reads the browser-restricted Maps key from the `roamstead-maps-browser-key` Secret Manager secret. Runtime configuration and the Gemini credential remain attached to the existing Cloud Run services and are not stored in the repository.
+
 The default deployment uses hosted Gemma 4 through the same Secret Manager API key. For the additional-model Cloud Run proof, deploy a private GPU-backed Gemma service and connect the API identity:
 
 ```powershell
