@@ -169,6 +169,29 @@ def build_brief_composer():
     return _build_brief_composer()
 
 
+def build_due_diligence_planner():
+    """Select a bounded property-specific watch plan from deterministic candidates."""
+
+    from google.adk.agents import Agent
+
+    shared = _shared_instruction()
+    return Agent(
+        name="DueDiligencePlanner",
+        model=os.getenv("ROAMSTEAD_GEMINI_MODEL", "gemini-3.5-flash"),
+        description="Chooses the smallest useful verification plan for three shortlisted properties.",
+        instruction=(
+            f"{shared} You receive exactly three listings and a menu of deterministic verification candidates. "
+            "Select only candidate IDs from that menu. Every listing must retain its SOURCE_AVAILABILITY candidate. "
+            "Choose at most nine tasks total and prefer different tools when the actual evidence gaps differ. "
+            "Do not schedule a tool merely to make the plan look complex. You cannot change scores, profile state, "
+            "prices, listings, or evidence. Return compact JSON only: "
+            '{"selected_task_ids":["..."],"public_summary":"..."}. The summary must explain the selected checks '
+            "without claiming they have already run."
+        ),
+        mode="task",
+    )
+
+
 def build_decision_workflow():
     """Return an explicit ADK graph with visible specialist boundaries."""
 

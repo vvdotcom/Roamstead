@@ -20,8 +20,13 @@ from ..models import (
     AgentRun,
     DecisionBrief,
     DecisionProfile,
+    DecisionWatch,
+    DecisionWatchEvent,
+    EvidenceRevision,
+    EvaluationReport,
     Listing,
     PreferenceProposal,
+    PromptRevisionCandidate,
     SemanticMemoryItem,
     Session,
 )
@@ -80,6 +85,7 @@ class ListingRepository:
                 CREATE TABLE IF NOT EXISTS listing_catalog (
                     id TEXT PRIMARY KEY,
                     transaction_mode TEXT NOT NULL,
+                    city TEXT NOT NULL DEFAULT 'Ho Chi Minh City',
                     price_band TEXT NOT NULL,
                     source_url TEXT NOT NULL UNIQUE,
                     payload_json TEXT NOT NULL,
@@ -168,6 +174,22 @@ class ListingRepository:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS evaluation_reports (
+                    id TEXT PRIMARY KEY,
+                    passed INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_evaluation_reports_created
+                    ON evaluation_reports(created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS prompt_revision_candidates (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS semantic_memory (
                     id TEXT PRIMARY KEY,
                     profile_id TEXT NOT NULL,
@@ -180,7 +202,52 @@ class ListingRepository:
                     ON semantic_memory(profile_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_semantic_memory_preference
                     ON semantic_memory(profile_id, preference_key, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS decision_watches (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    profile_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    next_run_at TEXT,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_decision_watches_profile
+                    ON decision_watches(profile_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_decision_watches_due
+                    ON decision_watches(status, next_run_at);
+
+                CREATE TABLE IF NOT EXISTS evidence_revisions (
+                    id TEXT PRIMARY KEY,
+                    watch_id TEXT NOT NULL,
+                    listing_id TEXT NOT NULL,
+                    tool TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_evidence_revisions_watch
+                    ON evidence_revisions(watch_id, created_at ASC);
+
+                CREATE TABLE IF NOT EXISTS decision_watch_events (
+                    id TEXT PRIMARY KEY,
+                    watch_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(watch_id, sequence)
+                );
                 """
+            )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(listing_catalog)").fetchall()
+            }
+            if "city" not in columns:
+                connection.execute(
+                    "ALTER TABLE listing_catalog ADD COLUMN city TEXT NOT NULL DEFAULT 'Ho Chi Minh City'"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_listing_catalog_city_mode ON listing_catalog(city, transaction_mode, last_seen_at DESC)"
             )
             version = connection.execute(
                 "SELECT value FROM catalog_meta WHERE key = 'schema_version'"
@@ -194,6 +261,7 @@ class ListingRepository:
                     CREATE TABLE listing_catalog (
                         id TEXT PRIMARY KEY,
                         transaction_mode TEXT NOT NULL,
+                        city TEXT NOT NULL DEFAULT 'Ho Chi Minh City',
                         price_band TEXT NOT NULL,
                         source_url TEXT NOT NULL,
                         payload_json TEXT NOT NULL,
@@ -204,6 +272,8 @@ class ListingRepository:
                         ON listing_catalog(transaction_mode, last_seen_at DESC);
                     CREATE INDEX idx_listing_catalog_mode_band
                         ON listing_catalog(transaction_mode, price_band);
+                    CREATE INDEX idx_listing_catalog_city_mode
+                        ON listing_catalog(city, transaction_mode, last_seen_at DESC);
                     CREATE INDEX idx_listing_catalog_source
                         ON listing_catalog(source_url);
                     """
@@ -217,29 +287,31 @@ class ListingRepository:
                     (CATALOG_SCHEMA_VERSION,),
                 )
 
-    def list(self, mode: str, limit: int = 100) -> list[Listing]:
+    def list(self, mode: str, limit: int = 100, city: str = "Ho Chi Minh City") -> list[Listing]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT payload_json
                 FROM listing_catalog
-                WHERE transaction_mode = ?
+                WHERE transaction_mode = ? AND city = ?
                 ORDER BY last_seen_at DESC, id ASC
                 LIMIT 400
                 """,
-                (mode,),
+                (mode, city),
             ).fetchall()
 
         if not rows and firestore_primary():
             cloud_items: list[Listing] = []
             for payload in query_documents("listing_catalog", "transaction_mode", mode):
                 try:
-                    cloud_items.append(Listing.model_validate(payload))
+                    item = Listing.model_validate(payload)
+                    if item.city == city:
+                        cloud_items.append(item)
                 except Exception:
                     continue
             if cloud_items:
                 self.save_progress(mode, cloud_items)
-                return self.list(mode, limit)
+                return self.list(mode, limit, city)
 
         buckets: dict[str, list[Listing]] = {band: [] for band in PRICE_BAND_ORDER}
         for row in rows:
@@ -265,7 +337,15 @@ class ListingRepository:
                 (listing_id,),
             ).fetchone()
         if not row:
-            return None
+            payload = get_document("listing_catalog", listing_id)
+            if not payload:
+                return None
+            try:
+                item = Listing.model_validate(payload)
+            except Exception:
+                return None
+            self.save_progress(item.transaction_mode, [item])
+            return item
         try:
             return Listing.model_validate_json(row["payload_json"])
         except Exception:
@@ -297,11 +377,12 @@ class ListingRepository:
             connection.execute(
                 """
                 INSERT INTO listing_catalog(
-                    id, transaction_mode, price_band, source_url,
+                    id, transaction_mode, city, price_band, source_url,
                     payload_json, first_seen_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     transaction_mode = excluded.transaction_mode,
+                    city = excluded.city,
                     price_band = excluded.price_band,
                     source_url = excluded.source_url,
                     payload_json = excluded.payload_json,
@@ -310,6 +391,7 @@ class ListingRepository:
                 (
                     item.id,
                     mode,
+                    item.city,
                     item.price_band,
                     item.source_url,
                     item.model_dump_json(),
@@ -325,7 +407,7 @@ class ListingRepository:
         now_iso = _utc_now().isoformat()
         with self._connect() as connection:
             self._upsert_items(connection, mode, items, now_iso)
-        return self.status(mode)
+        return self.status(mode, items[0].city)
 
     def save_success(self, mode: str, items: list[Listing]) -> dict[str, Any]:
         now = _utc_now()
@@ -335,10 +417,12 @@ class ListingRepository:
 
         with self._connect() as connection:
             self._upsert_items(connection, mode, items, now_iso)
-            connection.execute(
-                "DELETE FROM listing_catalog WHERE transaction_mode = ? AND last_seen_at < ?",
-                (mode, cutoff),
-            )
+            cities = sorted({item.city for item in items}) or ["Ho Chi Minh City"]
+            for city in cities:
+                connection.execute(
+                    "DELETE FROM listing_catalog WHERE transaction_mode = ? AND city = ? AND last_seen_at < ?",
+                    (mode, city, cutoff),
+                )
             connection.execute(
                 """
                 INSERT INTO listing_refresh(
@@ -353,7 +437,7 @@ class ListingRepository:
                 """,
                 (mode, now_iso, now_iso, len(items)),
             )
-        return self.status(mode)
+        return self.status(mode, items[0].city if items else "Ho Chi Minh City")
 
     def mark_failure(self, mode: str, error: str) -> dict[str, Any]:
         with self._connect() as connection:
@@ -369,15 +453,15 @@ class ListingRepository:
             )
         return self.status(mode)
 
-    def status(self, mode: str) -> dict[str, Any]:
+    def status(self, mode: str, city: str = "Ho Chi Minh City") -> dict[str, Any]:
         with self._connect() as connection:
             refresh = connection.execute(
                 "SELECT * FROM listing_refresh WHERE transaction_mode = ?",
                 (mode,),
             ).fetchone()
             count = connection.execute(
-                "SELECT COUNT(*) AS total FROM listing_catalog WHERE transaction_mode = ?",
-                (mode,),
+                "SELECT COUNT(*) AS total FROM listing_catalog WHERE transaction_mode = ? AND city = ?",
+                (mode, city),
             ).fetchone()["total"]
 
         refresh_hours = max(1, int(os.getenv("LISTING_REFRESH_HOURS", "168")))
@@ -393,6 +477,7 @@ class ListingRepository:
         next_refresh = refresh_anchor + timedelta(hours=refresh_hours) if refresh_anchor else None
         return {
             "transaction_mode": mode,
+            "city": city,
             "count": count,
             "last_attempt_at": refresh["last_attempt_at"] if refresh else None,
             "last_success_at": refresh["last_success_at"] if refresh else None,
@@ -404,8 +489,9 @@ class ListingRepository:
 
     def all_items(self, limit: int = 200) -> list[Listing]:
         items: list[Listing] = []
-        for mode in ("BUY", "RENT"):
-            items.extend(self.list(mode, limit))
+        for city in ("Ho Chi Minh City", "Bangkok", "Kuala Lumpur"):
+            for mode in ("BUY", "RENT"):
+                items.extend(self.list(mode, limit, city))
         return items
 
     def save_profile(self, profile: DecisionProfile) -> None:
@@ -672,6 +758,70 @@ class ListingRepository:
             reverse=True,
         )
 
+    def save_evaluation_report(self, report: EvaluationReport) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO evaluation_reports(id, passed, payload_json, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    passed = excluded.passed,
+                    payload_json = excluded.payload_json,
+                    created_at = excluded.created_at
+                """,
+                (report.id, int(report.passed), report.model_dump_json(), report.created_at),
+            )
+        persist_document("evaluation_reports", report.id, report.model_dump(mode="json"))
+        persist_document("evaluation_meta", "latest", report.model_dump(mode="json"))
+        if report.passed:
+            persist_document("evaluation_meta", "latest_passed", report.model_dump(mode="json"))
+
+    def latest_evaluation_report(self, *, passed_only: bool = False) -> EvaluationReport | None:
+        clause = "WHERE passed = 1" if passed_only else ""
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT payload_json FROM evaluation_reports {clause} ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        if row:
+            return EvaluationReport.model_validate_json(row["payload_json"])
+        payload = get_document("evaluation_meta", "latest_passed" if passed_only else "latest")
+        return EvaluationReport.model_validate(payload) if payload else None
+
+    def get_evaluation_report(self, report_id: str) -> EvaluationReport | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM evaluation_reports WHERE id = ?", (report_id,)
+            ).fetchone()
+        if row:
+            return EvaluationReport.model_validate_json(row["payload_json"])
+        payload = get_document("evaluation_reports", report_id)
+        return EvaluationReport.model_validate(payload) if payload else None
+
+    def save_prompt_revision_candidate(self, candidate: PromptRevisionCandidate) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO prompt_revision_candidates(id, status, payload_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    status = excluded.status,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (candidate.id, candidate.status, candidate.model_dump_json(), _utc_now().isoformat()),
+            )
+        persist_document("prompt_revision_candidates", candidate.id, candidate.model_dump(mode="json"))
+
+    def get_prompt_revision_candidate(self, candidate_id: str) -> PromptRevisionCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM prompt_revision_candidates WHERE id = ?", (candidate_id,)
+            ).fetchone()
+        if row:
+            return PromptRevisionCandidate.model_validate_json(row["payload_json"])
+        payload = get_document("prompt_revision_candidates", candidate_id)
+        return PromptRevisionCandidate.model_validate(payload) if payload else None
+
     def save_semantic_memory(self, item: SemanticMemoryItem) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -738,3 +888,187 @@ class ListingRepository:
                 for payload in query_semantic_memory(profile_id, query_vector, limit)
             ]
         return [(item, None) for item in self.list_semantic_memory(profile_id)]
+
+    def save_decision_watch(self, watch: DecisionWatch) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO decision_watches(
+                    id, idempotency_key, profile_id, status, next_run_at,
+                    payload_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    status = excluded.status,
+                    next_run_at = excluded.next_run_at,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    watch.id,
+                    watch.idempotency_key,
+                    watch.profile_id,
+                    watch.status,
+                    watch.next_run_at,
+                    watch.model_dump_json(),
+                    watch.updated_at,
+                ),
+            )
+        persist_document("decision_watches", watch.id, watch.model_dump(mode="json"))
+
+    def insert_decision_watch_if_absent(self, watch: DecisionWatch) -> DecisionWatch:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO decision_watches(
+                    id, idempotency_key, profile_id, status, next_run_at,
+                    payload_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO NOTHING
+                """,
+                (
+                    watch.id,
+                    watch.idempotency_key,
+                    watch.profile_id,
+                    watch.status,
+                    watch.next_run_at,
+                    watch.model_dump_json(),
+                    watch.updated_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT payload_json FROM decision_watches WHERE idempotency_key = ?",
+                (watch.idempotency_key,),
+            ).fetchone()
+        selected = DecisionWatch.model_validate_json(row["payload_json"])
+        if selected.id == watch.id:
+            persist_document("decision_watches", watch.id, watch.model_dump(mode="json"))
+        return selected
+
+    def get_decision_watch(self, watch_id: str) -> DecisionWatch | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM decision_watches WHERE id = ?", (watch_id,)
+            ).fetchone()
+        if row:
+            return DecisionWatch.model_validate_json(row["payload_json"])
+        payload = get_document("decision_watches", watch_id)
+        if not payload:
+            return None
+        watch = DecisionWatch.model_validate(payload)
+        self.save_decision_watch(watch)
+        return watch
+
+    def get_decision_watch_by_key(self, idempotency_key: str) -> DecisionWatch | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM decision_watches WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        if row:
+            return DecisionWatch.model_validate_json(row["payload_json"])
+        matches = query_documents("decision_watches", "idempotency_key", idempotency_key)
+        return DecisionWatch.model_validate(matches[0]) if matches else None
+
+    def list_decision_watches(self, profile_id: str) -> list[DecisionWatch]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM decision_watches WHERE profile_id = ? ORDER BY updated_at DESC",
+                (profile_id,),
+            ).fetchall()
+        if rows:
+            return [DecisionWatch.model_validate_json(row["payload_json"]) for row in rows]
+        return sorted(
+            [DecisionWatch.model_validate(payload) for payload in query_documents("decision_watches", "profile_id", profile_id)],
+            key=lambda watch: watch.updated_at,
+            reverse=True,
+        )
+
+    def list_due_decision_watches(self, limit: int = 5) -> list[DecisionWatch]:
+        now = _utc_now()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT payload_json FROM decision_watches
+                WHERE status = 'ACTIVE' AND next_run_at IS NOT NULL AND next_run_at <= ?
+                ORDER BY next_run_at ASC LIMIT ?
+                """,
+                (now.isoformat(), limit),
+            ).fetchall()
+        watches = [DecisionWatch.model_validate_json(row["payload_json"]) for row in rows]
+        if not watches and firestore_primary():
+            cloud_watches = [
+                DecisionWatch.model_validate(payload)
+                for payload in query_documents("decision_watches", "status", "ACTIVE")
+            ]
+            watches = sorted(
+                [
+                    watch
+                    for watch in cloud_watches
+                    if (parsed := _parse_datetime(watch.next_run_at)) is not None and parsed <= now
+                ],
+                key=lambda watch: watch.next_run_at or "",
+            )[:limit]
+        return watches
+
+    def save_evidence_revision(self, revision: EvidenceRevision) -> EvidenceRevision:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO evidence_revisions(
+                    id, watch_id, listing_id, tool, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision.id,
+                    revision.watch_id,
+                    revision.listing_id,
+                    revision.tool,
+                    revision.model_dump_json(),
+                    revision.created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT payload_json FROM evidence_revisions WHERE id = ?", (revision.id,)
+            ).fetchone()
+        selected = EvidenceRevision.model_validate_json(row["payload_json"])
+        if selected == revision:
+            persist_document("evidence_revisions", revision.id, revision.model_dump(mode="json"))
+        return selected
+
+    def list_evidence_revisions(self, watch_id: str) -> list[EvidenceRevision]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM evidence_revisions WHERE watch_id = ? ORDER BY created_at ASC",
+                (watch_id,),
+            ).fetchall()
+        if rows:
+            return [EvidenceRevision.model_validate_json(row["payload_json"]) for row in rows]
+        return sorted(
+            [EvidenceRevision.model_validate(payload) for payload in query_documents("evidence_revisions", "watch_id", watch_id)],
+            key=lambda revision: revision.created_at,
+        )
+
+    def save_decision_watch_event(self, event: DecisionWatchEvent) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO decision_watch_events(
+                    id, watch_id, sequence, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (event.id, event.watch_id, event.sequence, event.model_dump_json(), event.created_at),
+            )
+        persist_document("decision_watch_events", event.id, event.model_dump(mode="json"))
+
+    def list_decision_watch_events(self, watch_id: str) -> list[DecisionWatchEvent]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM decision_watch_events WHERE watch_id = ? ORDER BY sequence ASC",
+                (watch_id,),
+            ).fetchall()
+        if rows:
+            return [DecisionWatchEvent.model_validate_json(row["payload_json"]) for row in rows]
+        return sorted(
+            [DecisionWatchEvent.model_validate(payload) for payload in query_documents("decision_watch_events", "watch_id", watch_id)],
+            key=lambda event: event.sequence,
+        )

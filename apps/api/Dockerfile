@@ -5,7 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml ./
 COPY app ./app
+COPY eval_agents ./eval_agents
 COPY scripts ./scripts
+COPY evaluation_data ./evaluation_data
 RUN pip install --no-cache-dir . \
     && addgroup --system --gid 10001 roamstead \
     && adduser --system --uid 10001 --ingroup roamstead --no-create-home roamstead \

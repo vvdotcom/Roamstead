@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -138,6 +139,7 @@ class SessionMessage(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     housing_mode: Literal["BUY", "RENT"] = "BUY"
+    city: Literal["Ho Chi Minh City", "Bangkok", "Kuala Lumpur"] = "Ho Chi Minh City"
 
 
 class AssistantReply(BaseModel):
@@ -178,6 +180,7 @@ class ClarificationAnswerResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
+    city: Literal["Ho Chi Minh City", "Bangkok", "Kuala Lumpur"] = "Ho Chi Minh City"
     budget_usd: int = Field(ge=100, le=20_000_000)
     min_beds: int = Field(default=1, ge=0, le=20)
     min_baths: int = Field(default=1, ge=0, le=20)
@@ -192,8 +195,15 @@ class Listing(BaseModel):
     neighborhood_id: str
     title: str
     transaction_mode: Literal["BUY", "RENT"]
-    price_vnd: int = Field(gt=0)
+    city: str = "Ho Chi Minh City"
+    country: str = "Vietnam"
+    country_code: str = "VN"
+    local_currency: str = "VND"
+    price_local: int | None = Field(default=None, gt=0)
+    price_vnd: int | None = Field(default=None, gt=0)
     price_usd: int = Field(gt=0)
+    exchange_rate_per_usd: float | None = Field(default=None, gt=0)
+    exchange_rate_date: str | None = None
     price_band: Literal["LOW", "MEDIUM", "HIGH", "ULTRA_HIGH"]
     district: str
     address: str | None = None
@@ -220,6 +230,7 @@ class Listing(BaseModel):
 class ListingSearchRequest(BaseModel):
     transaction_mode: Literal["BUY", "RENT"]
     profile_id: str = Field(min_length=1)
+    city: Literal["Ho Chi Minh City", "Bangkok", "Kuala Lumpur"] = "Ho Chi Minh City"
     focused_neighborhood_id: str | None = None
     limit: int = Field(default=100, ge=1, le=100)
     refresh: bool = False
@@ -230,6 +241,7 @@ class ListingSearchResult(BaseModel):
     requested: int
     returned: int
     transaction_mode: Literal["BUY", "RENT"]
+    city: str = "Ho Chi Minh City"
     live: Literal[True] = True
     partial: bool
     minimum_photos_per_listing: int = 1
@@ -293,6 +305,9 @@ class AgentEvent(BaseModel):
     model: str | None = None
     provider: str | None = None
     duration_ms: int | None = Field(default=None, ge=0)
+    node_kind: Literal["FUNCTION", "TOOL", "AGENT", "MODEL_CRITIC", "JOIN", "ROUTER"] | None = None
+    parallel_group: str | None = None
+    parent_sequence: int | None = Field(default=None, ge=1)
     public_payload: dict = Field(default_factory=dict)
     created_at: str = Field(default_factory=now_iso)
 
@@ -308,6 +323,9 @@ class AgentRun(BaseModel):
     idempotency_key: str
     input_payload: dict = Field(default_factory=dict)
     current_stage: str = "QUEUED"
+    workflow_version: str = "partner-coordinator-v2"
+    prompt_version: str = "preference-interpreter-v1"
+    trace_id: str = Field(default_factory=lambda: uuid4().hex)
     completed_stages: list[str] = Field(default_factory=list)
     phase_outputs: dict = Field(default_factory=dict)
     models_used: list[str] = Field(default_factory=list)
@@ -317,6 +335,166 @@ class AgentRun(BaseModel):
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
     error: str | None = None
+
+
+class EvaluationMetricResult(BaseModel):
+    name: str
+    score: float = Field(ge=0, le=1)
+    threshold: float = Field(ge=0, le=1)
+    passed: bool
+    explanation: str = Field(default="", max_length=500)
+
+
+class EvaluationReport(BaseModel):
+    id: str
+    workflow_version: str
+    prompt_version: str
+    dataset_version: str
+    development_case_count: int = Field(ge=0)
+    validation_case_count: int = Field(ge=0)
+    hard_gates_passed: bool
+    passed: bool
+    metrics: list[EvaluationMetricResult] = Field(default_factory=list)
+    source: Literal["FIXTURE", "ADK_EVAL", "CLOUD_RUN_JOB"] = "FIXTURE"
+    created_at: str = Field(default_factory=now_iso)
+
+
+class PromptRevisionCandidate(BaseModel):
+    id: str
+    target_agent: Literal["PreferenceInterpreter"] = "PreferenceInterpreter"
+    baseline_prompt_version: str
+    candidate_prompt_version: str
+    baseline_report_id: str
+    candidate_report_id: str
+    composite_improvement: float
+    maximum_metric_regression: float
+    hard_gates_passed: bool
+    status: Literal["PROPOSED", "APPROVED", "REJECTED"] = "PROPOSED"
+    activation_allowed: bool = False
+    created_at: str = Field(default_factory=now_iso)
+    decided_at: str | None = None
+
+
+class QualityProof(BaseModel):
+    workflow_version: str
+    prompt_version: str
+    trace_id: str
+    evaluation_report_id: str | None = None
+    evaluation_passed: bool = False
+    case_count: int = Field(default=0, ge=0)
+    hard_gates_passed: bool = False
+    response_score: float | None = Field(default=None, ge=0, le=1)
+    trajectory_score: float | None = Field(default=None, ge=0, le=1)
+
+
+DueDiligenceTool = Literal[
+    "SOURCE_AVAILABILITY",
+    "PRICE_COMPARISON",
+    "PHOTO_EVIDENCE",
+    "CURRENCY_NORMALIZATION",
+    "PROXIMITY_VERIFICATION",
+]
+
+
+class DueDiligenceTask(BaseModel):
+    id: str
+    listing_id: str
+    tool: DueDiligenceTool
+    reason: str = Field(min_length=1, max_length=280)
+    priority: int = Field(default=3, ge=1, le=5)
+    baseline_value: str = Field(max_length=500)
+    baseline_status: EvidenceStatus
+    source_url: str
+    baseline_observed_at: str
+
+
+class DueDiligencePlan(BaseModel):
+    id: str
+    profile_id: str
+    profile_version: int = Field(ge=1)
+    listing_ids: list[str] = Field(min_length=3, max_length=3)
+    tasks: list[DueDiligenceTask] = Field(min_length=3, max_length=9)
+    public_summary: str = Field(min_length=1, max_length=500)
+    model: str = "gemini-3.5-flash"
+    provider: Literal["GOOGLE_ADK", "DETERMINISTIC_FALLBACK"] = "GOOGLE_ADK"
+    degraded: bool = False
+    created_at: str = Field(default_factory=now_iso)
+
+
+class EvidenceObservation(BaseModel):
+    value: str = Field(max_length=500)
+    status: EvidenceStatus
+    source_url: str
+    observed_at: str
+
+
+class EvidenceRevision(BaseModel):
+    id: str
+    watch_id: str
+    listing_id: str
+    task_id: str
+    tool: DueDiligenceTool
+    outcome: Literal["CHANGED", "UNCHANGED", "UNKNOWN"]
+    before: EvidenceObservation
+    after: EvidenceObservation
+    explanation: str = Field(min_length=1, max_length=500)
+    created_at: str = Field(default_factory=now_iso)
+
+
+class DecisionWatchEvent(BaseModel):
+    id: str
+    watch_id: str
+    sequence: int = Field(ge=1)
+    event_type: Literal[
+        "PLAN_CREATED",
+        "WATCH_APPROVED",
+        "EXECUTION_STARTED",
+        "TOOL_COMPLETED",
+        "TOOL_DEGRADED",
+        "REVISION_CREATED",
+        "WATCH_COMPLETED",
+        "WATCH_CANCELED",
+    ]
+    title: str
+    summary: str
+    public_payload: dict = Field(default_factory=dict)
+    created_at: str = Field(default_factory=now_iso)
+
+
+class DecisionWatch(BaseModel):
+    id: str
+    idempotency_key: str
+    profile_id: str
+    listing_ids: list[str] = Field(min_length=3, max_length=3)
+    plan: DueDiligencePlan
+    status: Literal["PROPOSED", "ACTIVE", "RUNNING", "CANCELED", "DEGRADED"] = "PROPOSED"
+    approval_required: Literal[True] = True
+    approved_at: str | None = None
+    next_run_at: str | None = None
+    last_run_at: str | None = None
+    canceled_at: str | None = None
+    revision_count: int = Field(default=0, ge=0)
+    run_count: int = Field(default=0, ge=0)
+    last_outcome: Literal["COMPLETED", "DEGRADED"] | None = None
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class CreateDecisionWatchRequest(BaseModel):
+    profile_id: str = Field(min_length=1)
+    listing_ids: list[str] = Field(min_length=3, max_length=3)
+    idempotency_key: str | None = Field(default=None, max_length=120)
+
+
+class ApproveDecisionWatchRequest(BaseModel):
+    run_now: bool = True
+
+
+class DecisionWatchResponse(BaseModel):
+    watch: DecisionWatch
+    revisions: list[EvidenceRevision] = Field(default_factory=list)
+    events: list[DecisionWatchEvent] = Field(default_factory=list)
+    reused: bool = False
 
 
 class EvidenceClaim(BaseModel):
@@ -470,6 +648,7 @@ class DecisionBrief(BaseModel):
     visual_audit: VisualEvidenceAudit | None = None
     memory_context: MemoryContextPacket | None = None
     memory_audit: MemoryConsistencyAudit | None = None
+    quality_proof: QualityProof | None = None
     models_used: list[str] = Field(default_factory=list)
     degraded: bool = False
     generated_at: str = Field(default_factory=now_iso)

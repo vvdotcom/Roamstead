@@ -1,113 +1,128 @@
-# Roamstead — Google Cloud Production Architecture
+# Roamstead — Deployed Google Cloud Architecture
 
-This diagram represents the production deployment described in `GOOGLE_CLOUD_DEPLOYMENT_PLAN.md`. It intentionally uses Firestore rather than Cloud SQL because Roamstead stores document-oriented decision memory, listings, and durable agent traces—not relational PostgreSQL data.
+This judge-facing diagram contains only resources used by the deployed system. The public browser connects directly to the generated Cloud Run URL; Cloud DNS, an external load balancer, and Cloud Armor are intentionally absent because they are not deployed.
 
 ```mermaid
 graph TB
-    USER["U.S. buyer or renter<br/>Desktop / mobile browser"]
+    USER["Buyer or renter<br/>Desktop / mobile browser"]
     MAPS["Google Maps Platform<br/>Maps JavaScript + Geocoding"]
+    ADMIN["Bounded one-time media generator<br/>3 cities · 8 seconds each"]
+    subgraph MEDIAAI["GOOGLE AI MEDIA APIS"]
+        direction LR
+        VEO["Veo 3.1 Lite<br/>city orientation video"]
+        TTS["Gemini 3.1 Flash TTS<br/>factual narrated brief"]
+    end
 
-    subgraph GCP["Google Cloud Platform · Production"]
+    subgraph GCP["GOOGLE CLOUD · roamstead-506707 · us-central1"]
         direction TB
-
-        subgraph EDGE["GLOBAL EDGE & SECURITY"]
+        subgraph APP["SERVERLESS APPLICATION"]
             direction LR
-            DNS["Cloud DNS<br/>roamstead domain"]
-            ARMOR["Cloud Armor<br/>WAF + rate policies"]
-            LB["Global HTTPS Load Balancer<br/>Managed TLS · serverless NEG"]
+            WEB["Cloud Run · roamstead-web<br/>Next.js · REST/SSE proxy"]
+            API["Cloud Run · roamstead-api<br/>FastAPI · Google ADK 2"]
         end
-
-        subgraph REGION["SERVERLESS APPLICATION · us-central1"]
+        subgraph ADK["PARTNERCOORDINATOR · ACTUAL ADK WORKFLOW"]
             direction TB
-            WEB["Cloud Run · roamstead-web<br/>Next.js 16 + React 19<br/>REST/SSE proxy · no server secrets"]
-            API["Cloud Run · roamstead-api<br/>FastAPI + Google ADK<br/>PartnerCoordinator · deterministic Fit Score"]
+            LOCK["Function nodes<br/>lock inputs · Fit Scores · hard gates"]
+            MEMORY["SemanticMemoryTool<br/>Gemini Embedding 001 · 768d"]
+            ANALYST["ListingAnalyst<br/>Gemini 3.5 Flash"]
+            GEMMA26["VisualEvidenceCritic<br/>Gemma 4 26B · real photos"]
+            GEMMA31["MemoryConsistencyCritic<br/>Gemma 4 31B · decision memory"]
+            JOIN["CriticJoin<br/>wait for both branches"]
+            VERIFY["EvidenceVerifier + one correction router<br/>Gemini 3.5 Flash"]
+            COMPOSE["BriefComposer + persisted trace<br/>Gemini 3.5 Flash"]
+            LOCK --> MEMORY --> ANALYST
+            ANALYST --> GEMMA26
+            ANALYST --> GEMMA31
+            GEMMA26 --> JOIN
+            GEMMA31 --> JOIN
+            JOIN --> VERIFY --> COMPOSE
         end
-
-        subgraph AI["GOOGLE AI MODEL LAYER"]
+        subgraph WATCH["APPROVAL-GATED DECISION WATCH"]
             direction LR
-            EMBED["Gemini Embedding 001<br/>768d semantic retrieval"]
-            GEMINI["Gemini 3.5 Flash<br/>analysis · verification · brief composition"]
-            GEMMA26["Gemma 4 26B<br/>multimodal VisualEvidenceCritic"]
-            GEMMA31["Gemma 4 31B<br/>MemoryConsistencyCritic"]
+            PLANNER["DueDiligencePlanner<br/>ADK dynamic tool selection"]
+            APPROVE["Human approval gate<br/>cancelable · max 3 properties"]
+            TOOLS["Deterministic checks<br/>source · price · photo · currency · proximity"]
+            REVISION["Immutable EvidenceRevision<br/>before / after / unknown"]
+            PLANNER --> APPROVE --> TOOLS --> REVISION
         end
-
-        subgraph DATA["DURABLE DATA & EVIDENCE"]
+        subgraph DATA["PERSISTENT DATA"]
             direction LR
-            FS["Firestore Native + vector index<br/>profiles · semantic memory · revisions<br/>listings · runs/events · briefs"]
-            GCS["Cloud Storage<br/>private verified listing photos"]
+            FS["Firestore Native<br/>profiles · listings · briefs · watches · events"]
+            VECTOR["Firestore vector index<br/>profile-isolated cosine KNN"]
+            GCS["Cloud Storage<br/>listing photos · city media · eval reports"]
+            SECRET["Secret Manager<br/>Gemini API credential"]
         end
-
-        subgraph ASYNC["WEEKLY REAL-DATA PIPELINE"]
+        subgraph JOBS["SCALE-TO-ZERO JOBS"]
             direction LR
-            SCHED["Cloud Scheduler<br/>Monday 09:00 UTC"]
-            JOB["Cloud Run Job<br/>Gemini-grounded catalog refresh"]
+            SCHED["Cloud Scheduler<br/>PAUSED pending bounded cost test"]
+            WEEKLY["Cloud Run Job<br/>weekly catalog + approved watches"]
+            EVAL["Cloud Run Job · manual<br/>20-case ADK release evaluation"]
             PUB["Pub/Sub<br/>completion / failure events"]
+            SCHED -. paused trigger .-> WEEKLY
+            WEEKLY --> PUB
         end
-
-        subgraph PLATFORM["SECURITY, DELIVERY & OPERATIONS"]
+        subgraph PROOF["OBSERVABILITY & DELIVERY"]
             direction LR
-            SECRET["Secret Manager<br/>Gemini credential"]
-            BUILD["Cloud Build<br/>test + container build"]
-            AR["Artifact Registry<br/>immutable API/web images"]
-            OPS["Cloud Logging & Monitoring<br/>request IDs · alerts · audit proof"]
+            BQ["BigQuery Agent Analytics<br/>redacted tool trajectories"]
+            TRACE["Cloud Trace<br/>trace IDs + timing"]
+            BUILD["Cloud Build + Artifact Registry<br/>versioned API/web images"]
         end
     end
 
-    USER -->|HTTPS| DNS
-    DNS --> LB
-    ARMOR -. protects .-> LB
-    LB -->|serverless NEG| WEB
+    USER -->|direct HTTPS Cloud Run URL| WEB
     USER -->|map tiles + geocoding| MAPS
+    ADMIN --> VEO
+    ADMIN --> TTS
+    VEO -->|generated once| GCS
+    TTS -->|generated once| GCS
+    ADMIN -->|model IDs · hashes · READY state| FS
     WEB -->|REST + resumable SSE| API
-
-    API -->|768d query embedding| EMBED
-    EMBED -->|profile-isolated cosine KNN| FS
-    API -->|ADK specialist calls| GEMINI
-    GEMINI -->|public claims + real photos| GEMMA26
-    GEMMA26 -->|typed visual audit| GEMMA31
-    GEMMA31 -->|typed memory audit| GEMINI
-    API -->|durable state| FS
+    API --> LOCK
+    API --> PLANNER
+    MEMORY <--> VECTOR
+    API <--> FS
     API -->|private image reads| GCS
+    REVISION --> FS
+    REVISION -->|in-app notification| WEB
     SECRET -. runtime secret .-> API
-
-    SCHED -. weekly trigger .-> JOB
-    SECRET -. runtime secret .-> JOB
-    JOB -. atomic catalog writes .-> FS
-    JOB -. verified photo writes .-> GCS
-    JOB -. status event .-> PUB
-
-    BUILD -. publish .-> AR
-    AR -. deploy .-> WEB
-    AR -. deploy .-> API
-    API -. structured logs .-> OPS
-    JOB -. execution logs .-> OPS
+    SECRET -. runtime secret .-> WEEKLY
+    SECRET -. runtime secret .-> EVAL
+    SECRET -. administrative access .-> ADMIN
+    WEEKLY --> FS
+    WEEKLY --> GCS
+    EVAL --> FS
+    EVAL --> GCS
+    API -. redacted ADK events .-> BQ
+    API -. spans .-> TRACE
+    BUILD -. deploy revisions .-> WEB
+    BUILD -. deploy revisions .-> API
 
     classDef blue fill:#4285f4,stroke:#1a5fbf,color:#ffffff,stroke-width:2px;
     classDef red fill:#ea4335,stroke:#b3261e,color:#ffffff,stroke-width:2px;
     classDef yellow fill:#fbbc05,stroke:#b07b00,color:#202124,stroke-width:2px;
     classDef green fill:#34a853,stroke:#1e7e3e,color:#ffffff,stroke-width:2px;
     classDef purple fill:#7e57c2,stroke:#5e35b1,color:#ffffff,stroke-width:2px;
-    classDef surface fill:#ffffff,stroke:#c8d7eb,color:#17324d,stroke-width:2px;
-
-    class DNS,LB,WEB,API,FS,GCS,BUILD,AR blue;
-    class ARMOR,SECRET red;
-    class SCHED,PUB yellow;
-    class JOB,OPS green;
-    class EMBED,GEMINI,GEMMA26,GEMMA31 purple;
-    class USER,MAPS surface;
-
+    classDef surface fill:#ffffff,stroke:#b9cce3,color:#17324d,stroke-width:2px;
+    class WEB,API,FS,VECTOR,GCS,BUILD blue;
+    class SECRET red;
+    class SCHED,APPROVE,PUB yellow;
+    class WEEKLY,EVAL,TOOLS,REVISION,BQ,TRACE green;
+    class MEMORY,ANALYST,GEMMA26,GEMMA31,VERIFY,COMPOSE,PLANNER,VEO,TTS purple;
+    class USER,MAPS,ADMIN,LOCK,JOIN surface;
     style GCP fill:#f7faff,stroke:#4285f4,stroke-width:3px,color:#17324d
-    style EDGE fill:#ffffff,stroke:#d5e2f3,stroke-width:2px,color:#49627d
-    style REGION fill:#f5f9ff,stroke:#9ec1f5,stroke-width:2px,color:#49627d
-    style AI fill:#faf7ff,stroke:#c8b5ef,stroke-width:2px,color:#5e35b1
+    style APP fill:#f5f9ff,stroke:#9ec1f5,stroke-width:2px,color:#49627d
+    style ADK fill:#faf7ff,stroke:#c8b5ef,stroke-width:2px,color:#5e35b1
+    style WATCH fill:#fffaf0,stroke:#f4cc65,stroke-width:2px,color:#7b5b0b
     style DATA fill:#f6fbff,stroke:#a9caee,stroke-width:2px,color:#49627d
-    style ASYNC fill:#fffaf0,stroke:#f4cc65,stroke-width:2px,color:#7b5b0b
-    style PLATFORM fill:#f6fbf7,stroke:#9ed4ae,stroke-width:2px,color:#285d37
+    style JOBS fill:#f6fbf7,stroke:#9ed4ae,stroke-width:2px,color:#285d37
+    style PROOF fill:#ffffff,stroke:#c9d7e6,stroke-width:2px,color:#49627d
+    style MEDIAAI fill:#faf7ff,stroke:#c8b5ef,stroke-width:2px,color:#5e35b1
 ```
 
-## Reading the diagram
+## Judge-readable trust boundary
 
-- Solid blue paths are live user request and agent/model flows.
-- Dashed paths are policies, deployment, secrets, scheduled work, persistence, and observability.
-- The browser talks only to the public web edge and Google Maps Platform; Gemini, Firestore, Storage, and privileged credentials stay behind the FastAPI boundary.
-- Fit Scores and hard filters remain deterministic. Gemini and Gemma interpret and verify evidence but do not alter prices, filters, or profile weights.
+- Function nodes own hard filters, Fit Scores, evidence-state transitions, approval, and persistence.
+- Gemini and Gemma reason over bounded packets; neither model can silently change the user profile or invent listing evidence.
+- The two Gemma critics are independent parallel branches and must both complete or degrade before `CriticJoin` releases verification.
+- Decision Watch mutates only the evidence timeline after explicit approval. A missing or contradictory source becomes `UNKNOWN`; it is never replaced with synthetic data.
+- The weekly scheduler stays paused until one bounded refresh confirms the cost envelope.

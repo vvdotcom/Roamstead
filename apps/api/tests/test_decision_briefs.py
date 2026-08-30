@@ -140,7 +140,7 @@ def test_live_specialists_and_multimodal_gemma_audit_are_persisted(monkeypatch):
         decision_brief_service._checkpoint(run, stage, output, model=run.model)
         return output
 
-    async def fake_gemma(run, *, stage, evidence_packet, analysis, images, attempt):
+    async def fake_gemma(run, *, stage, evidence_packet, analysis, images, attempt, parallel_group=None):
         decision_brief_service._event(
             run,
             decision_brief_service._next_sequence(run.id),
@@ -152,6 +152,7 @@ def test_live_specialists_and_multimodal_gemma_audit_are_persisted(monkeypatch):
             phase=stage,
             model="gemma-4-26b-a4b-it",
             provider="GEMINI_API",
+            parallel_group=parallel_group,
         )
         await asyncio.sleep(0.002)
         grouped = []
@@ -195,6 +196,7 @@ def test_live_specialists_and_multimodal_gemma_audit_are_persisted(monkeypatch):
             model=audit.model,
             provider=audit.provider,
             duration_ms=2,
+            parallel_group=parallel_group,
         )
         decision_brief_service._checkpoint(run, stage, audit, model=audit.model)
         return audit
@@ -236,7 +238,18 @@ def test_live_specialists_and_multimodal_gemma_audit_are_persisted(monkeypatch):
         decision_brief_service._checkpoint(run, "SEMANTIC_MEMORY", packet, model="gemini-embedding-001")
         return packet
 
-    async def fake_memory_critic(run, *, stage, profile, memory_context, evidence_packet, analysis, visual_audit, attempt):
+    async def fake_memory_critic(
+        run,
+        *,
+        stage,
+        profile,
+        memory_context,
+        evidence_packet,
+        analysis,
+        visual_audit,
+        attempt,
+        parallel_group=None,
+    ):
         audit = MemoryConsistencyAudit(
             verdict="CONSISTENT",
             summary="The public comparison stays within the approved profile and fixture memory packet.",
@@ -254,6 +267,7 @@ def test_live_specialists_and_multimodal_gemma_audit_are_persisted(monkeypatch):
             phase=stage,
             model=audit.model,
             provider=audit.provider,
+            parallel_group=parallel_group,
         )
         await asyncio.sleep(0.002)
         decision_brief_service._event(
@@ -268,6 +282,7 @@ def test_live_specialists_and_multimodal_gemma_audit_are_persisted(monkeypatch):
             model=audit.model,
             provider=audit.provider,
             duration_ms=2,
+            parallel_group=parallel_group,
         )
         decision_brief_service._checkpoint(run, stage, audit, model=audit.model)
         return audit
@@ -306,6 +321,19 @@ def test_live_specialists_and_multimodal_gemma_audit_are_persisted(monkeypatch):
     assert all(item["visual_audit"]["images"] for item in brief["properties"])
 
     events = decision_brief_service.repository.list_agent_events(run_id)
+    critic_starts = [
+        event
+        for event in events
+        if event.event_type == "SPECIALIST_STARTED"
+        and event.actor in {"VisualEvidenceCritic", "MemoryConsistencyCritic"}
+        and event.parallel_group == "CRITICS_1"
+    ]
+    join = next(event for event in events if event.actor == "CriticJoin")
+    assert {event.actor for event in critic_starts} == {"VisualEvidenceCritic", "MemoryConsistencyCritic"}
+    assert all(event.sequence < join.sequence for event in critic_starts)
+    assert join.node_kind == "JOIN"
+    assert join.parallel_group == "CRITICS_1"
+    assert next(event for event in events if event.actor == "CorrectionRouter").node_kind == "ROUTER"
     first_completed = next(event.sequence for event in events if event.event_type == "SPECIALIST_COMPLETED")
     replay = client.get(f"/api/v1/decision-briefs/{run_id}/events?after={first_completed}")
     assert f"id: {first_completed}\n" not in replay.text

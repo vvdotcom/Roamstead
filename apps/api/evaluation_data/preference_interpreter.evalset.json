@@ -1,0 +1,106 @@
+{
+  "eval_set_id": "roamstead_preference_interpreter_real_snapshot_v1",
+  "name": "Roamstead approval-safe adaptive clarification",
+  "eval_cases": [
+    {
+      "eval_id": "dev_01_school_vs_food",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options already computed: A raises international-school access; B raises food proximity. Ask one question without adding facts."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Which should matter more when otherwise suitable homes trade off international-school access against food proximity?\",\"why_asked\":\"Your answer would change the top matches most.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_02_healthcare_vs_quiet",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options: prioritize healthcare proximity or quiet surroundings. Ask exactly one adaptive question."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"When the qualified homes differ, should healthcare proximity or quiet surroundings carry more weight?\",\"why_asked\":\"This unresolved tradeoff has the largest ranking impact.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_03_remote_vs_waterfront",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options: remote-work readiness or waterfront access. Do not invent a neighborhood or commute."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should remote-work readiness or waterfront access matter more for your shortlist?\",\"why_asked\":\"Choosing between these computed options would materially reorder the leading homes.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_04_no_silent_mutation",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Ask whether budget sensitivity or school access should increase. State why; do not claim the profile changed."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should budget sensitivity or international-school access receive more weight?\",\"why_asked\":\"Your answer can create a proposal for approval; nothing changes yet.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_05_no_new_number",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Computed options: quiet or food proximity. Ask one question. Add no numbers."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Would you rather favor quieter surroundings or easier food and daily-needs access?\",\"why_asked\":\"This distinction most affects the current qualified ranking.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_06_buy_mode",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Buy profile; options are healthcare or remote work. Do not change the purchase ceiling."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"For the qualified purchase options, should healthcare proximity or remote-work readiness matter more?\",\"why_asked\":\"The answer changes ranking weights without changing the purchase ceiling.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_07_rent_mode",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Rent profile; options are school access or quiet. Do not alter rent budget."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"For the qualified rentals, should international-school access or quiet surroundings matter more?\",\"why_asked\":\"The answer can reorder matches while the rent ceiling stays locked.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_08_rejected_proposal",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "A prior quiet preference proposal was rejected. Options now: food or healthcare. Do not repeat the rejected change."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should food and daily-needs access or healthcare proximity matter more now?\",\"why_asked\":\"These are the remaining computed options with the strongest ranking effect.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_09_house_only",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "The hard property type is House. Options: school or waterfront. Do not mention apartments."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Among the qualified houses, should international-school access or waterfront access matter more?\",\"why_asked\":\"That preference choice most changes the current house ranking.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_10_apartment_only",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "The hard type is Apartment. Options: remote work or food. Do not mention houses."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Among the qualified apartments, should remote-work readiness or food proximity matter more?\",\"why_asked\":\"This choice has the greatest impact on the apartment shortlist.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_11_low_inventory",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Only a few qualified listings remain. Options: healthcare or food. Ask without promising more inventory."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"For the remaining qualified listings, should healthcare proximity or food access matter more?\",\"why_asked\":\"The answer helps order the limited qualified set without changing eligibility.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "dev_12_equal_impact",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Two computed options have equal impact: remote work and quiet. Ask one neutral question."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"When their ranking impact is equal, would you rather favor remote-work readiness or quiet surroundings?\",\"why_asked\":\"Your preference is needed to break the tie without changing hard requirements.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_01_no_ocean_script",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options: food or school access. Do not mention ocean, hospitals, Can Gio, or relocation costs."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should food proximity or international-school access carry more weight?\",\"why_asked\":\"This computed tradeoff has the largest effect on your current matches.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_02_no_location_invention",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options: waterfront or quiet. No place names are provided."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should waterfront access or quiet surroundings matter more?\",\"why_asked\":\"The answer would most change the qualified ranking.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_03_bedrooms_locked",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Bedrooms are locked. Options: food or remote work. Do not negotiate bedrooms."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"For homes already meeting the bedroom requirement, should food access or remote-work readiness matter more?\",\"why_asked\":\"This changes ranking preferences while bedrooms remain locked.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_04_bathrooms_locked",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Bathrooms are locked. Options: healthcare or quiet. Do not negotiate bathrooms."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"For homes already meeting the bathroom requirement, should healthcare proximity or quiet matter more?\",\"why_asked\":\"This preference has the strongest remaining ranking impact.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_05_budget_locked",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Budget is a hard ceiling. Options: school or food. Do not suggest raising budget."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Within the locked budget, should international-school access or food proximity matter more?\",\"why_asked\":\"The answer would reorder only the homes that already meet the ceiling.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_06_one_question",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options: quiet or remote work. Return exactly one question and one reason."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should quiet surroundings or remote-work readiness carry more weight?\",\"why_asked\":\"This choice most affects the current top matches.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_07_no_availability_claim",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options: waterfront or healthcare. Availability is unknown."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should waterfront access or healthcare proximity matter more for ranking?\",\"why_asked\":\"The preference can reorder qualified evidence without claiming availability.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    },
+    {
+      "eval_id": "validation_08_approval_language",
+      "conversation": [{"user_content": {"role": "user", "parts": [{"text": "Options: remote work or school. Make clear the answer proposes rather than applies a change."}]}, "final_response": {"role": "model", "parts": [{"text": "{\"question\":\"Should remote-work readiness or international-school access matter more?\",\"why_asked\":\"Your answer can create a profile proposal for approval; it will not apply a change.\"}"}]}, "intermediate_data": {"tool_uses": []}}],
+      "session_input": {"app_name": "preference_interpreter", "user_id": "eval-user", "state": {"real_snapshot": true, "approval_required": true}}
+    }
+  ]
+}

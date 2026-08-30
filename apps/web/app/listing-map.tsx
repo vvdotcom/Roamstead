@@ -6,8 +6,26 @@ import { AlertTriangle, MapPin, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Listing } from "@/lib/api";
 
-const HCMC_CENTER = { lat: 10.7769, lng: 106.7009 };
-const HCMC_BOUNDS = { south: 10.35, west: 106.3, north: 11.25, east: 107.15 };
+const MARKET_MAPS = {
+  "Ho Chi Minh City": {
+    center: { lat: 10.7769, lng: 106.7009 },
+    bounds: { south: 10.35, west: 106.3, north: 11.25, east: 107.15 },
+    country: "Vietnam",
+    region: "VN",
+  },
+  Bangkok: {
+    center: { lat: 13.7563, lng: 100.5018 },
+    bounds: { south: 13.45, west: 100.25, north: 14.05, east: 100.95 },
+    country: "Thailand",
+    region: "TH",
+  },
+  "Kuala Lumpur": {
+    center: { lat: 3.139, lng: 101.6869 },
+    bounds: { south: 2.95, west: 101.5, north: 3.35, east: 101.85 },
+    country: "Malaysia",
+    region: "MY",
+  },
+} as const;
 const CACHE_KEY = "roamstead_google_geocodes_v1";
 const CACHE_TTL_MS = 29 * 24 * 60 * 60 * 1000;
 const WORKERS = 4;
@@ -19,13 +37,13 @@ let configuredKey = "";
 
 function geocodeQuery(listing: Listing) {
   const sourceLocation = listing.address?.trim() || listing.district;
-  return `${sourceLocation}, Ho Chi Minh City, Vietnam`;
+  return `${sourceLocation}, ${listing.city}, ${listing.country}`;
 }
 
-function insideHcmc(location: google.maps.LatLng) {
+function insideMarket(location: google.maps.LatLng, bounds: google.maps.LatLngBoundsLiteral) {
   const lat = location.lat();
   const lng = location.lng();
-  return lat >= HCMC_BOUNDS.south && lat <= HCMC_BOUNDS.north && lng >= HCMC_BOUNDS.west && lng <= HCMC_BOUNDS.east;
+  return lat >= bounds.south && lat <= bounds.north && lng >= bounds.west && lng <= bounds.east;
 }
 
 function readCache(): GeoCache {
@@ -53,18 +71,19 @@ async function locate(
   geocoder: google.maps.Geocoder,
   cache: GeoCache,
 ): Promise<google.maps.LatLngLiteral | null> {
+  const market = MARKET_MAPS[listing.city as keyof typeof MARKET_MAPS] ?? MARKET_MAPS["Ho Chi Minh City"];
   const query = geocodeQuery(listing);
   const cached = cache[query];
   if (cached) return { lat: cached.lat, lng: cached.lng };
 
   const attempts = [query];
-  const districtQuery = `${listing.district}, Ho Chi Minh City, Vietnam`;
+  const districtQuery = `${listing.district}, ${listing.city}, ${listing.country}`;
   if (districtQuery !== query) attempts.push(districtQuery);
 
   for (const address of attempts) {
     try {
-      const response = await geocoder.geocode({ address, bounds: HCMC_BOUNDS, region: "VN" });
-      const match = response.results.find((result) => insideHcmc(result.geometry.location));
+      const response = await geocoder.geocode({ address, bounds: market.bounds, region: market.region });
+      const match = response.results.find((result) => insideMarket(result.geometry.location, market.bounds));
       if (!match) continue;
       const value = { lat: match.geometry.location.lat(), lng: match.geometry.location.lng(), cachedAt: Date.now() };
       cache[query] = value;
@@ -93,6 +112,8 @@ export default function ListingMap({
   const mapTypeRef = useRef<"roadmap" | "satellite">("roadmap");
   const [mapType, setMapType] = useState<"roadmap" | "satellite">("roadmap");
   const [status, setStatus] = useState<"MISSING_KEY" | "LOADING" | "READY" | "ERROR">(apiKey ? "LOADING" : "MISSING_KEY");
+  const city = listings[0]?.city ?? "Ho Chi Minh City";
+  const market = MARKET_MAPS[city as keyof typeof MARKET_MAPS] ?? MARKET_MAPS["Ho Chi Minh City"];
 
   function switchMapType(nextType: "roadmap" | "satellite") {
     mapTypeRef.current = nextType;
@@ -111,7 +132,7 @@ export default function ListingMap({
       setStatus("LOADING");
       try {
         if (!configuredKey) {
-          setOptions({ key: apiKey, v: "weekly", language: "en", region: "VN", authReferrerPolicy: "origin" });
+          setOptions({ key: apiKey, v: "weekly", language: "en", authReferrerPolicy: "origin" });
           configuredKey = apiKey;
         }
         const [{ Map }, { LatLngBounds }, { Geocoder }, { AdvancedMarkerElement, PinElement }] = await Promise.all([
@@ -123,7 +144,7 @@ export default function ListingMap({
         if (cancelled || !mapElement.current) return;
 
         const map = new Map(mapElement.current, {
-          center: HCMC_CENTER,
+          center: market.center,
           zoom: 11,
           mapId,
           mapTypeId: mapTypeRef.current,
@@ -213,7 +234,7 @@ export default function ListingMap({
       clusterer?.clearMarkers();
       markers.forEach((marker) => { marker.map = null; });
     };
-  }, [apiKey, listings, mapId, mobile, onListing]);
+  }, [apiKey, listings, mapId, market, mobile, onListing]);
 
   if (!apiKey) {
     return (

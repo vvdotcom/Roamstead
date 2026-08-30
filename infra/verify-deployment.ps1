@@ -2,7 +2,8 @@ param(
   [Parameter(Mandatory = $true)][string]$ProjectId,
   [string]$Region = "us-central1",
   [int]$MinimumListingsPerMode = 25,
-  [string]$ProofRunId = ""
+  [string]$ProofRunId = "",
+  [switch]$RequireEvaluationProof
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,12 +37,17 @@ if (-not $Health.agent.semantic_memory.enabled -or $Health.agent.semantic_memory
 if ($Health.persistence -notlike "Firestore primary*") {
   throw "The API is not reporting Firestore as its primary persistence mode."
 }
+if (-not $Health.observability.bigquery_agent_analytics -or -not $Health.observability.cloud_trace) {
+  throw "BigQuery ADK analytics and Cloud Trace are not both enabled in the deployed API."
+}
 
 $WebResponse = Invoke-WebRequest -Uri $WebUrl -UseBasicParsing -TimeoutSec 30
 if ($WebResponse.StatusCode -ne 200 -or $WebResponse.Content -notmatch "Roamstead") {
   throw "The deployed web service did not return the Roamstead application."
 }
 
+$VerificationProfileId = ""
+$VerificationListingIds = @()
 foreach ($Mode in @("BUY", "RENT")) {
   $Session = Invoke-RestMethod `
     -Method Post `
@@ -61,16 +67,59 @@ foreach ($Mode in @("BUY", "RENT")) {
   if (@($Search.items | Where-Object { $_.demo -ne $false -or $_.source_domain -ne "batdongsan.com.vn" }).Count -gt 0) {
     throw "$Mode returned a listing that failed the real-data-only source contract."
   }
+  if ($Mode -eq "BUY") {
+    $VerificationProfileId = $Session.session.profile_id
+    $VerificationListingIds = @($Search.items | Select-Object -First 3 | ForEach-Object { $_.id })
+  }
+}
+
+$Watch = Invoke-RestMethod `
+  -Method Post `
+  -Uri "$ApiUrl/api/v1/decision-watches" `
+  -ContentType "application/json" `
+  -Body (@{
+      profile_id = $VerificationProfileId
+      listing_ids = $VerificationListingIds
+      idempotency_key = "deployment-verification-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    } | ConvertTo-Json -Depth 5) `
+  -TimeoutSec 90
+if ($Watch.watch.status -ne "PROPOSED" -or -not $Watch.watch.approval_required -or @($Watch.revisions).Count -ne 0) {
+  throw "Decision Watch did not preserve the explicit approval gate."
+}
+if ($Watch.watch.plan.degraded -or $Watch.watch.plan.provider -ne "GOOGLE_ADK") {
+  throw "Decision Watch fell back instead of persisting a successful live ADK planning result."
+}
+if (@($Watch.watch.plan.tasks).Count -lt 3 -or @($Watch.watch.plan.tasks).Count -gt 9) {
+  throw "DueDiligencePlanner returned an unbounded task plan."
+}
+foreach ($ListingId in $VerificationListingIds) {
+  if (@($Watch.watch.plan.tasks | Where-Object { $_.listing_id -eq $ListingId -and $_.tool -eq "SOURCE_AVAILABILITY" }).Count -ne 1) {
+    throw "Decision Watch did not include exactly one source check for $ListingId."
+  }
+}
+$CanceledWatch = Invoke-RestMethod -Method Post -Uri "$ApiUrl/api/v1/decision-watches/$($Watch.watch.id)/cancel" -ContentType "application/json" -TimeoutSec 30
+if ($CanceledWatch.watch.status -ne "CANCELED" -or $null -ne $CanceledWatch.watch.next_run_at) {
+  throw "Decision Watch cancellation did not prevent future execution."
 }
 
 gcloud firestore databases describe --project $ProjectId --database "(default)" | Out-Null
-$VectorIndex = gcloud firestore indexes composite list --project $ProjectId --database "(default)" --filter "collectionGroup:semantic_memory AND fields.fieldPath:embedding" --format "value(state)" --limit 1
-if ($VectorIndex -ne "READY") {
+$VectorIndexes = @(gcloud firestore indexes composite list --project $ProjectId --database "(default)" --format json | ConvertFrom-Json)
+$VectorIndex = $VectorIndexes | Where-Object {
+  $_.queryScope -eq "COLLECTION" -and
+  @($_.fields | Where-Object { $_.fieldPath -eq "embedding" -and $_.vectorConfig.dimension -eq 768 }).Count -gt 0
+} | Select-Object -First 1
+if (-not $VectorIndex -or $VectorIndex.state -ne "READY") {
   throw "The Firestore semantic_memory vector index is missing or not READY."
 }
 gcloud pubsub topics describe roamstead-catalog-events --project $ProjectId | Out-Null
 gcloud storage buckets describe "gs://$ProjectId-roamstead-listing-images" --project $ProjectId | Out-Null
 gcloud run jobs describe roamstead-weekly-catalog --project $ProjectId --region $Region | Out-Null
+gcloud run jobs describe roamstead-agent-eval --project $ProjectId --region $Region | Out-Null
+$SchedulerState = gcloud scheduler jobs describe roamstead-weekly-catalog --project $ProjectId --location $Region --format "value(state)"
+if ($SchedulerState -ne "PAUSED") {
+  throw "The weekly scheduler must remain PAUSED until one bounded maintenance run is measured."
+}
+bq --project_id=$ProjectId show --dataset "$ProjectId`:roamstead_agent_analytics" | Out-Null
 
 if (-not [string]::IsNullOrWhiteSpace($ProofRunId)) {
   $Brief = Invoke-RestMethod -Uri "$ApiUrl/api/v1/decision-briefs/$ProofRunId" -TimeoutSec 30
@@ -83,6 +132,21 @@ if (-not [string]::IsNullOrWhiteSpace($ProofRunId)) {
   }
 }
 
-Write-Output "PASS: Roamstead web, API, ADK/Gemini, both Gemma critics, Gemini Embedding, Firestore vector index, real listing inventory, Pub/Sub, Storage, and weekly job are deployment-ready."
+if ($RequireEvaluationProof) {
+  $Evaluation = Invoke-RestMethod -Uri "$ApiUrl/api/v1/evaluations/latest" -TimeoutSec 30
+  if (-not $Evaluation.passed -or -not $Evaluation.hard_gates_passed) {
+    throw "The latest persisted evaluation report did not pass every hard gate."
+  }
+  if (($Evaluation.development_case_count + $Evaluation.validation_case_count) -ne 20) {
+    throw "The persisted release evaluation does not contain the required 20 cases."
+  }
+  $Metrics = @{}
+  foreach ($Metric in $Evaluation.metrics) { $Metrics[$Metric.name] = $Metric.score }
+  if ($Metrics["response_quality"] -lt 0.85 -or $Metrics["tool_trajectory"] -lt 0.90 -or $Metrics["safety_and_real_data_gates"] -ne 1) {
+    throw "The persisted release evaluation missed a response, trajectory, or safety threshold."
+  }
+}
+
+Write-Output "PASS: Roamstead web, API, ADK/Gemini, both Gemma critics, Gemini Embedding, Firestore vector index, approval-gated Decision Watch, redacted BigQuery analytics, Cloud Trace, real listing inventory, Pub/Sub, Storage, paused Scheduler, and both Cloud Run jobs are deployment-ready."
 Write-Output "Web: $WebUrl"
 Write-Output "API: $ApiUrl"

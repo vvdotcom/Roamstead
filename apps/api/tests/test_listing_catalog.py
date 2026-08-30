@@ -58,6 +58,40 @@ def test_sqlite_catalog_persists_and_balances_price_bands(tmp_path: Path):
     assert reopened.status("RENT")["due"] is False
 
 
+def test_saved_catalog_is_isolated_by_city(tmp_path: Path):
+    repository = ListingRepository(tmp_path / "markets.db")
+    hcmc = make_listing(1, "LOW")
+    bangkok = make_listing(2, "MEDIUM").model_copy(
+        update={
+            "id": "propertyhub-bangkok-2",
+            "city": "Bangkok",
+            "country": "Thailand",
+            "country_code": "TH",
+            "local_currency": "THB",
+            "price_local": 42_000,
+            "price_vnd": None,
+            "source_url": "https://propertyhub.in.th/en/listings/bangkok-2",
+        }
+    )
+    kuala_lumpur = make_listing(3, "HIGH").model_copy(
+        update={
+            "id": "propertygenie-kuala-lumpur-3",
+            "city": "Kuala Lumpur",
+            "country": "Malaysia",
+            "country_code": "MY",
+            "local_currency": "MYR",
+            "price_local": 8_500,
+            "price_vnd": None,
+            "source_url": "https://www.propertygenie.com.my/property/kuala-lumpur-3",
+        }
+    )
+    repository.save_progress("RENT", [hcmc, bangkok, kuala_lumpur])
+
+    assert [item.id for item in repository.list("RENT", city="Ho Chi Minh City")] == [hcmc.id]
+    assert [item.id for item in repository.list("RENT", city="Bangkok")] == [bangkok.id]
+    assert [item.id for item in repository.list("RENT", city="Kuala Lumpur")] == [kuala_lumpur.id]
+
+
 def test_hundred_item_catalog_requires_real_core_band_coverage(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("LISTING_MIN_PER_CORE_BAND", "20")
     catalog = ListingCatalog(ListingRepository(tmp_path / "catalog.db"))

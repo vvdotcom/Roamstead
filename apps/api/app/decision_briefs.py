@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from .agent import agent_enabled, build_brief_composer, build_evidence_verifier, build_listing_analyst
+from .cloud import download_listing_image
 from .data import CANDIDATES
 from .gemma_critic import (
     VisualImageInput,
@@ -24,6 +25,7 @@ from .listing_fit import score_listing_results
 from .listings.catalog import listing_catalog
 from .listings.images import available_gallery_size, cached_gallery_paths, public_image_url
 from .memory_critic import audit_memory_consistency, memory_critic_enabled, memory_critic_model
+from .observability import adk_analytics_plugins
 from .models import (
     AgentEvent,
     AgentRun,
@@ -36,6 +38,7 @@ from .models import (
     Listing,
     MemoryConsistencyAudit,
     MemoryContextPacket,
+    QualityProof,
     VisualEvidenceAudit,
 )
 from .semantic_memory import EMBEDDING_MODEL, retrieve_memory
@@ -89,7 +92,24 @@ class DecisionBriefService:
         model: str | None = None,
         provider: str | None = None,
         duration_ms: int | None = None,
+        node_kind: str | None = None,
+        parallel_group: str | None = None,
+        parent_sequence: int | None = None,
     ) -> AgentEvent:
+        if node_kind is None:
+            node_kind = {
+                "SemanticMemoryTool": "TOOL",
+                "ListingAnalyst": "AGENT",
+                "EvidenceVerifier": "AGENT",
+                "BriefComposer": "AGENT",
+                "VisualEvidenceCritic": "MODEL_CRITIC",
+                "MemoryConsistencyCritic": "MODEL_CRITIC",
+                "CriticJoin": "JOIN",
+                "CorrectionRouter": "ROUTER",
+                "LockDecisionInputs": "FUNCTION",
+                "RecalculateFitScores": "FUNCTION",
+                "PersistDecisionBrief": "FUNCTION",
+            }.get(actor)
         event = AgentEvent(
             id=f"event-{uuid4().hex[:12]}",
             run_id=run.id,
@@ -103,6 +123,9 @@ class DecisionBriefService:
             model=model,
             provider=provider,
             duration_ms=duration_ms,
+            node_kind=node_kind,
+            parallel_group=parallel_group,
+            parent_sequence=parent_sequence,
             public_payload=public_payload or {},
         )
         self.repository.save_agent_event(event)
@@ -248,13 +271,29 @@ class DecisionBriefService:
         inputs: list[VisualImageInput] = []
         maximum = maximum_photos_per_listing()
         for item in properties:
-            for index, path in enumerate(cached_gallery_paths(item.listing_id)[:maximum]):
+            local_paths = cached_gallery_paths(item.listing_id)[:maximum]
+            for index, path in enumerate(local_paths):
                 inputs.append(
                     VisualImageInput(
                         listing_id=item.listing_id,
                         image_index=index,
                         image_url=public_image_url(item.listing_id, index),
                         path=path,
+                    )
+                )
+            if local_paths:
+                continue
+            for index in range(min(maximum, len(item.image_urls))):
+                cloud_image = download_listing_image(item.listing_id, index)
+                if not cloud_image:
+                    continue
+                image_bytes, _ = cloud_image
+                inputs.append(
+                    VisualImageInput(
+                        listing_id=item.listing_id,
+                        image_index=index,
+                        image_url=public_image_url(item.listing_id, index),
+                        data=image_bytes,
                     )
                 )
         return inputs
@@ -289,7 +328,19 @@ class DecisionBriefService:
             model=run.model,
             provider="GOOGLE_ADK",
         )
-        runner = InMemoryRunner(agent=agent)
+        plugins = adk_analytics_plugins()
+        if plugins:
+            from google.adk.apps import App
+
+            runner = InMemoryRunner(
+                app=App(
+                    name=f"roamstead_{actor.casefold()}",
+                    root_agent=agent,
+                    plugins=plugins,
+                )
+            )
+        else:
+            runner = InMemoryRunner(agent=agent)
         session_id = f"{run.id}-{stage.lower()}-{attempt}"
         await runner.session_service.create_session(
             app_name=runner.app_name,
@@ -346,6 +397,7 @@ class DecisionBriefService:
         analysis: str,
         images: list[VisualImageInput],
         attempt: int,
+        parallel_group: str | None = None,
     ) -> VisualEvidenceAudit | None:
         saved = run.phase_outputs.get(stage)
         if stage in run.completed_stages and isinstance(saved, dict):
@@ -365,6 +417,7 @@ class DecisionBriefService:
             phase=stage,
             model=gemma_model(),
             provider=gemma_provider(),
+            parallel_group=parallel_group,
         )
         audit = await audit_visual_evidence(evidence_packet, {"ListingAnalyst": analysis}, images)
         if audit is None:
@@ -382,6 +435,7 @@ class DecisionBriefService:
             model=audit.model,
             provider=audit.provider,
             duration_ms=duration_ms,
+            parallel_group=parallel_group,
         )
         self._checkpoint(run, stage, audit, model=audit.model)
         return audit
@@ -445,6 +499,7 @@ class DecisionBriefService:
         analysis: str,
         visual_audit: VisualEvidenceAudit | None,
         attempt: int,
+        parallel_group: str | None = None,
     ) -> MemoryConsistencyAudit | None:
         saved = run.phase_outputs.get(stage)
         if stage in run.completed_stages and isinstance(saved, dict):
@@ -463,6 +518,7 @@ class DecisionBriefService:
             phase=stage,
             model=memory_critic_model(),
             provider="GEMINI_API",
+            parallel_group=parallel_group,
         )
         audit = await audit_memory_consistency(
             profile=profile.model_dump(mode="json"),
@@ -485,6 +541,7 @@ class DecisionBriefService:
             model=audit.model,
             provider=audit.provider,
             duration_ms=audit.duration_ms,
+            parallel_group=parallel_group,
         )
         self._checkpoint(run, stage, audit, model=audit.model)
         return audit
@@ -782,6 +839,430 @@ class DecisionBriefService:
             self.repository.save_agent_run(run)
             return None, audit, memory_context, memory_audit, degraded
 
+    async def _adk2_pipeline(
+        self,
+        run: AgentRun,
+        profile: DecisionProfile,
+        properties: list[DecisionBriefProperty],
+    ) -> tuple[str | None, VisualEvidenceAudit | None, MemoryContextPacket, MemoryConsistencyAudit | None, bool]:
+        """Execute the durable brief specialists inside one real ADK 2 graph.
+
+        The specialist functions retain their typed provider adapters, while ADK
+        owns scheduling, parallel fan-out, joins, and the bounded correction
+        route. Public events are persisted inside each node before SSE can read
+        them.
+        """
+
+        from google.adk.runners import InMemoryRunner
+        from google.adk.workflow import Edge, FunctionNode, JoinNode, START, Workflow
+        from google.genai import types
+
+        packet = self._evidence_packet(properties)
+        images = self._visual_inputs(properties)
+        state: dict[str, object] = {
+            "analysis": "",
+            "verification": "",
+            "summary": None,
+            "visual_audit": None,
+            "memory_audit": None,
+            "memory_context": MemoryContextPacket(query="", status="UNAVAILABLE"),
+            "degraded": False,
+            "correction_needed": False,
+        }
+
+        async def lock_inputs() -> dict:
+            return {"profile_version": profile.version, "listing_count": len(properties)}
+
+        async def recalculate_fit_scores() -> dict:
+            return {"scores": {item.listing_id: item.fit_score for item in properties}}
+
+        async def semantic_memory_node() -> dict:
+            memory = await self._run_semantic_memory(run, profile)
+            state["memory_context"] = memory
+            if memory.status != "READY":
+                state["degraded"] = True
+                run.degraded = True
+            return memory.model_dump(mode="json")
+
+        async def analysis_node(attempt: int, stage: str) -> dict:
+            memory = state["memory_context"]
+            assert isinstance(memory, MemoryContextPacket)
+            prompt = (
+                "Analyze these three listings using only the deterministic packet and approved profile. "
+                "Retrieved memory is advisory context, never a hard requirement: "
+                + json.dumps(
+                    {
+                        "evidence": packet,
+                        "profile": profile.model_dump(mode="json"),
+                        "memory": memory.model_dump(mode="json"),
+                        "correction_feedback": state.get("correction_feedback") if attempt == 2 else None,
+                    }
+                )
+            )
+            analysis = await self._run_adk_specialist(
+                run,
+                actor="ListingAnalyst",
+                stage=stage,
+                agent=build_listing_analyst(),
+                prompt=prompt,
+                attempt=attempt,
+            )
+            state["analysis"] = analysis
+            return {"analysis": analysis, "attempt": attempt}
+
+        async def listing_analysis_one() -> dict:
+            return await analysis_node(1, "LISTING_ANALYSIS_1")
+
+        async def visual_node(attempt: int, stage: str, group: str) -> dict:
+            try:
+                kwargs = dict(
+                    stage=stage,
+                    evidence_packet=packet,
+                    analysis=str(state["analysis"]),
+                    images=images,
+                    attempt=attempt,
+                )
+                if "parallel_group" in __import__("inspect").signature(self._run_visual_critic).parameters:
+                    kwargs["parallel_group"] = group
+                audit = await self._run_visual_critic(run, **kwargs)
+                state["visual_audit"] = audit
+                if audit is None:
+                    raise RuntimeError("visual critic returned no typed audit")
+                return audit.model_dump(mode="json")
+            except Exception as exc:
+                state["degraded"] = True
+                run.degraded = True
+                self._event(
+                    run,
+                    self._next_sequence(run.id),
+                    "RUN_DEGRADED",
+                    "VisualEvidenceCritic",
+                    "Gemma visual audit unavailable",
+                    "The other critic continues independently; this run cannot count as successful Gemma visual proof.",
+                    {"error_type": type(exc).__name__},
+                    phase=stage,
+                    model=gemma_model(),
+                    provider=gemma_provider(),
+                    parallel_group=group,
+                )
+                return {"succeeded": False, "error_type": type(exc).__name__}
+
+        async def memory_node(attempt: int, stage: str, group: str) -> dict:
+            memory = state["memory_context"]
+            assert isinstance(memory, MemoryContextPacket)
+            try:
+                kwargs = dict(
+                    stage=stage,
+                    profile=profile,
+                    memory_context=memory,
+                    evidence_packet=packet,
+                    analysis=str(state["analysis"]),
+                    visual_audit=None,
+                    attempt=attempt,
+                )
+                if "parallel_group" in __import__("inspect").signature(self._run_memory_critic).parameters:
+                    kwargs["parallel_group"] = group
+                audit = await self._run_memory_critic(run, **kwargs)
+                state["memory_audit"] = audit
+                if audit is None:
+                    raise RuntimeError("memory critic returned no typed audit")
+                return audit.model_dump(mode="json")
+            except Exception as exc:
+                state["degraded"] = True
+                run.degraded = True
+                self._event(
+                    run,
+                    self._next_sequence(run.id),
+                    "RUN_DEGRADED",
+                    "MemoryConsistencyCritic",
+                    "Gemma memory audit unavailable",
+                    "The visual critic continues independently; the approved profile remains authoritative.",
+                    {"error_type": type(exc).__name__},
+                    phase=stage,
+                    model=memory_critic_model(),
+                    provider="GEMINI_API",
+                    parallel_group=group,
+                )
+                return {"succeeded": False, "error_type": type(exc).__name__}
+
+        async def visual_one() -> dict:
+            return await visual_node(1, "VISUAL_AUDIT_1", "CRITICS_1")
+
+        async def memory_one() -> dict:
+            return await memory_node(1, "MEMORY_CONSISTENCY_1", "CRITICS_1")
+
+        async def critic_join_one() -> dict:
+            self._event(
+                run,
+                self._next_sequence(run.id),
+                "TOOL_RESULT",
+                "CriticJoin",
+                "Independent critic branches joined",
+                "ADK waited for both Gemma branches to complete or degrade before verification.",
+                {"parallel_group": "CRITICS_1"},
+                phase="CRITIC_JOIN_1",
+                provider="GOOGLE_ADK",
+                parallel_group="CRITICS_1",
+            )
+            return {"joined": True}
+
+        async def verifier_node(attempt: int, stage: str) -> dict:
+            visual = state["visual_audit"]
+            memory_audit = state["memory_audit"]
+            memory = state["memory_context"]
+            assert isinstance(memory, MemoryContextPacket)
+            verification = await self._run_adk_specialist(
+                run,
+                actor="EvidenceVerifier",
+                stage=stage,
+                agent=build_evidence_verifier(),
+                prompt=json.dumps(
+                    {
+                        "deterministic_evidence": packet,
+                        "listing_analysis": state["analysis"],
+                        "visual_audit": visual.model_dump(mode="json") if isinstance(visual, VisualEvidenceAudit) else None,
+                        "memory_context": memory.model_dump(mode="json"),
+                        "memory_audit": memory_audit.model_dump(mode="json") if isinstance(memory_audit, MemoryConsistencyAudit) else None,
+                    }
+                ),
+                attempt=attempt,
+            )
+            state["verification"] = verification
+            return {"verification": verification, "attempt": attempt}
+
+        async def evidence_verification_one() -> dict:
+            return await verifier_node(1, "EVIDENCE_VERIFICATION_1")
+
+        def has_challenge() -> bool:
+            visual = state["visual_audit"]
+            memory_audit = state["memory_audit"]
+            return bool(
+                (isinstance(visual, VisualEvidenceAudit) and visual.verdict == "CHALLENGE")
+                or (isinstance(memory_audit, MemoryConsistencyAudit) and memory_audit.verdict == "CHALLENGE")
+                or str(state["verification"]).casefold().startswith("revise")
+            )
+
+        async def correction_router(ctx) -> dict:
+            needed = has_challenge()
+            state["correction_needed"] = needed
+            ctx.route = "CORRECT_ONCE" if needed else "COMPOSE"
+            self._event(
+                run,
+                self._next_sequence(run.id),
+                "CORRECTION_REQUESTED" if needed else "TOOL_RESULT",
+                "CorrectionRouter",
+                "One bounded correction requested" if needed else "No correction required",
+                (
+                    "A deterministic ADK route permits exactly one correction without changing evidence, scores, or profile state."
+                    if needed
+                    else "Both independent audits and verification cleared the analysis."
+                ),
+                {"route": "CORRECT_ONCE" if needed else "COMPOSE", "max_corrections": 1},
+                status="RUNNING" if needed else "COMPLETED",
+                phase="CORRECTION_ROUTE",
+                provider="GOOGLE_ADK",
+            )
+            if needed:
+                state["correction_feedback"] = " ".join(
+                    [
+                        str(state["verification"]),
+                        *(
+                            state["visual_audit"].challenged_claims
+                            if isinstance(state["visual_audit"], VisualEvidenceAudit)
+                            else []
+                        ),
+                        *(
+                            [
+                                *state["memory_audit"].unsupported_user_assumptions,
+                                *state["memory_audit"].omitted_tradeoffs,
+                                *state["memory_audit"].conflicting_preferences,
+                            ]
+                            if isinstance(state["memory_audit"], MemoryConsistencyAudit)
+                            else []
+                        ),
+                    ]
+                )
+            return {"route": ctx.route, "correction_needed": needed}
+
+        async def listing_analysis_two() -> dict:
+            return await analysis_node(2, "LISTING_ANALYSIS_2")
+
+        async def visual_two() -> dict:
+            return await visual_node(2, "VISUAL_AUDIT_2", "CRITICS_2")
+
+        async def memory_two() -> dict:
+            return await memory_node(2, "MEMORY_CONSISTENCY_2", "CRITICS_2")
+
+        async def critic_join_two() -> dict:
+            self._event(
+                run,
+                self._next_sequence(run.id),
+                "TOOL_RESULT",
+                "CriticJoin",
+                "Correction critics joined",
+                "ADK completed the only permitted correction audit fan-out.",
+                {"parallel_group": "CRITICS_2", "corrections_used": 1},
+                phase="CRITIC_JOIN_2",
+                provider="GOOGLE_ADK",
+                parallel_group="CRITICS_2",
+            )
+            return {"joined": True, "corrections_used": 1}
+
+        async def evidence_verification_two() -> dict:
+            result = await verifier_node(2, "EVIDENCE_VERIFICATION_2")
+            if has_challenge():
+                state["degraded"] = True
+                run.degraded = True
+            self._event(
+                run,
+                self._next_sequence(run.id),
+                "TOOL_RESULT",
+                "CorrectionRouter",
+                "Bounded correction completed",
+                "The correction limit is now closed; unresolved language falls back to deterministic evidence.",
+                {"corrections_used": 1, "challenge_cleared": not has_challenge()},
+                phase="CORRECTION_COMPLETE",
+                provider="GOOGLE_ADK",
+            )
+            return result
+
+        async def compose_brief() -> dict:
+            if not state["analysis"] or (bool(state["degraded"]) and str(state["verification"]).casefold().startswith("revise")):
+                state["summary"] = None
+                return {"summary": None, "deterministic_fallback": True}
+            visual = state["visual_audit"]
+            memory_audit = state["memory_audit"]
+            memory = state["memory_context"]
+            assert isinstance(memory, MemoryContextPacket)
+            summary = await self._run_adk_specialist(
+                run,
+                actor="BriefComposer",
+                stage="BRIEF_COMPOSITION",
+                agent=build_brief_composer(),
+                prompt=json.dumps(
+                    {
+                        "deterministic_evidence": packet,
+                        "listing_analysis": state["analysis"],
+                        "visual_audit": visual.model_dump(mode="json") if isinstance(visual, VisualEvidenceAudit) else None,
+                        "memory_context": memory.model_dump(mode="json"),
+                        "memory_audit": memory_audit.model_dump(mode="json") if isinstance(memory_audit, MemoryConsistencyAudit) else None,
+                        "verification": state["verification"],
+                    }
+                ),
+                attempt=1,
+            )
+            state["summary"] = summary
+            return {"summary": summary}
+
+        async def persist_marker() -> dict:
+            self._event(
+                run,
+                self._next_sequence(run.id),
+                "TOOL_RESULT",
+                "PersistDecisionBrief",
+                "Workflow output ready for durable save",
+                "The ADK graph finished; the API is committing the typed brief and quality proof atomically.",
+                phase="PERSIST_READY",
+                provider="DATABASE",
+            )
+            return {"ready": True}
+
+        lock = FunctionNode(func=lock_inputs, name="LockDecisionInputs")
+        score = FunctionNode(func=recalculate_fit_scores, name="RecalculateFitScores")
+        memory = FunctionNode(func=semantic_memory_node, name="SemanticMemoryTool")
+        analyst_one = FunctionNode(func=listing_analysis_one, name="ListingAnalyst")
+        visual_first = FunctionNode(func=visual_one, name="VisualEvidenceCritic")
+        memory_first = FunctionNode(func=memory_one, name="MemoryConsistencyCritic")
+        join_first_barrier = JoinNode(name="CriticJoinBarrier")
+        join_first = FunctionNode(func=critic_join_one, name="CriticJoin")
+        verifier_first = FunctionNode(func=evidence_verification_one, name="EvidenceVerifier")
+        router = FunctionNode(func=correction_router, name="CorrectionRouter")
+        analyst_two = FunctionNode(func=listing_analysis_two, name="ListingAnalystCorrection")
+        visual_second = FunctionNode(func=visual_two, name="VisualEvidenceCriticCorrection")
+        memory_second = FunctionNode(func=memory_two, name="MemoryConsistencyCriticCorrection")
+        join_second_barrier = JoinNode(name="CorrectionCriticJoinBarrier")
+        join_second = FunctionNode(func=critic_join_two, name="CorrectionCriticJoin")
+        verifier_second = FunctionNode(func=evidence_verification_two, name="EvidenceVerifierCorrection")
+        composer = FunctionNode(func=compose_brief, name="BriefComposer")
+        persist = FunctionNode(func=persist_marker, name="PersistDecisionBrief")
+        workflow = Workflow(
+            name="PartnerCoordinator",
+            description="Hybrid deterministic and model workflow for evidence-bounded housing decisions.",
+            max_concurrency=3,
+            edges=[
+                (START, lock),
+                (lock, score),
+                (score, memory),
+                (memory, analyst_one),
+                (analyst_one, (visual_first, memory_first)),
+                ((visual_first, memory_first), join_first_barrier),
+                (join_first_barrier, join_first),
+                (join_first, verifier_first),
+                (verifier_first, router),
+                Edge(from_node=router, to_node=analyst_two, route="CORRECT_ONCE"),
+                Edge(from_node=router, to_node=composer, route="COMPOSE"),
+                (analyst_two, (visual_second, memory_second)),
+                ((visual_second, memory_second), join_second_barrier),
+                (join_second_barrier, join_second),
+                (join_second, verifier_second),
+                (verifier_second, composer),
+                (composer, persist),
+            ],
+        )
+
+        try:
+            from google.adk.apps import App
+
+            runner = InMemoryRunner(
+                app=App(
+                    name="roamstead_decision_brief",
+                    root_agent=workflow,
+                    plugins=adk_analytics_plugins(),
+                )
+            )
+            session_id = f"{run.id}-workflow-{run.workflow_version}"
+            await runner.session_service.create_session(
+                app_name=runner.app_name,
+                user_id=run.profile_id,
+                session_id=session_id,
+            )
+            async for _ in runner.run_async(
+                user_id=run.profile_id,
+                session_id=session_id,
+                invocation_id=run.trace_id,
+                new_message=types.Content(
+                    role="user",
+                    parts=[types.Part(text="Build the saved three-property Decision Brief from the locked input snapshot.")],
+                ),
+            ):
+                pass
+        except Exception as exc:
+            logger.exception("ADK 2 workflow degraded for run %s", run.id)
+            state["degraded"] = True
+            run.degraded = True
+            self._event(
+                run,
+                self._next_sequence(run.id),
+                "RUN_DEGRADED",
+                "PartnerCoordinator",
+                "ADK 2 workflow degraded",
+                "The deterministic brief path remains available and no listing evidence was substituted.",
+                {"error_type": type(exc).__name__, "workflow_version": run.workflow_version},
+                phase=run.current_stage,
+                provider="GOOGLE_ADK",
+            )
+            self.repository.save_agent_run(run)
+
+        memory_context = state["memory_context"]
+        assert isinstance(memory_context, MemoryContextPacket)
+        return (
+            state["summary"] if isinstance(state["summary"], str) else None,
+            state["visual_audit"] if isinstance(state["visual_audit"], VisualEvidenceAudit) else None,
+            memory_context,
+            state["memory_audit"] if isinstance(state["memory_audit"], MemoryConsistencyAudit) else None,
+            bool(state["degraded"]),
+        )
+
     async def create(self, request: CreateDecisionBriefRequest, profile: DecisionProfile) -> CreateDecisionBriefResponse:
         """Persist a queued run and return before any specialist starts."""
         if len(set(request.listing_ids)) != 3:
@@ -806,6 +1287,8 @@ class DecisionBriefService:
             status="QUEUED",
             model=os.getenv("ROAMSTEAD_GEMINI_MODEL", "gemini-3.5-flash"),
             execution_mode="ADK_GEMINI" if agent_enabled() else "VERIFIED_CACHE",
+            workflow_version=os.getenv("ROAMSTEAD_WORKFLOW_VERSION", "partner-coordinator-v2"),
+            prompt_version=os.getenv("ROAMSTEAD_PROMPT_VERSION", "preference-interpreter-v1"),
             idempotency_key=key,
             input_payload={
                 "listing_ids": request.listing_ids,
@@ -879,14 +1362,16 @@ class DecisionBriefService:
             run,
             sequence,
             "AGENT_STATUS",
-            "PartnerCoordinator",
+            "LockDecisionInputs",
             "Decision Brief started" if sequence == 1 else "Decision Brief resumed",
             "Locked the saved profile version and three selected listing IDs for this run.",
             {"phase": "RUNNING", "profile_version": profile.version},
             status="RUNNING",
             phase="PROFILE_LOCK",
             provider="DATABASE",
+            node_kind="FUNCTION",
         )
+        self._checkpoint(run, "PROFILE_LOCK", {"profile_version": profile.version, "listing_ids": listing_ids})
 
         raw_items = [listing_catalog.get(listing_id) for listing_id in listing_ids]
         if any(item is None for item in raw_items):
@@ -902,12 +1387,13 @@ class DecisionBriefService:
                 run,
                 sequence,
                 "TOOL_RESULT",
-                "FitScoreTool",
+                "RecalculateFitScores",
                 "Profile fit recalculated",
                 "Deterministic Fit Scores were recalculated from the saved Decision Profile.",
                 {"scores": {item.id: item.fit_score for item in scored}},
                 phase="FIT_SCORE",
                 provider="DETERMINISTIC_TOOL",
+                node_kind="FUNCTION",
             )
             properties = [self._property(item) for item in scored]
             self._event(
@@ -935,7 +1421,14 @@ class DecisionBriefService:
             )
             self._checkpoint(run, "DETERMINISTIC_EVIDENCE", [item.model_dump(mode="json") for item in properties])
 
-        observation, visual_audit, memory_context, memory_audit, degraded = await self._agent_pipeline(run, profile, properties)
+        if agent_enabled():
+            observation, visual_audit, memory_context, memory_audit, degraded = await self._adk2_pipeline(
+                run, profile, properties
+            )
+        else:
+            observation, visual_audit, memory_context, memory_audit, degraded = await self._agent_pipeline(
+                run, profile, properties
+            )
         if visual_audit:
             audits = {item.listing_id: item for item in visual_audit.properties}
             properties = [
@@ -959,6 +1452,19 @@ class DecisionBriefService:
             observation
             or f"{best.title} currently leads this three-property comparison at {best.fit_score}/100. "
             "The ranking uses your approved profile; availability and transaction eligibility remain unknown until independently verified."
+        )
+        evaluation = self.repository.latest_evaluation_report(passed_only=True)
+        metric_map = {item.name: item.score for item in evaluation.metrics} if evaluation else {}
+        quality_proof = QualityProof(
+            workflow_version=run.workflow_version,
+            prompt_version=run.prompt_version,
+            trace_id=run.trace_id,
+            evaluation_report_id=evaluation.id if evaluation else None,
+            evaluation_passed=bool(evaluation and evaluation.passed),
+            case_count=(evaluation.development_case_count + evaluation.validation_case_count) if evaluation else 0,
+            hard_gates_passed=bool(evaluation and evaluation.hard_gates_passed),
+            response_score=metric_map.get("response_quality"),
+            trajectory_score=metric_map.get("tool_trajectory"),
         )
         brief = DecisionBrief(
             run_id=run.id,
@@ -984,6 +1490,7 @@ class DecisionBriefService:
             visual_audit=visual_audit,
             memory_context=memory_context,
             memory_audit=memory_audit,
+            quality_proof=quality_proof,
             models_used=run.models_used,
             degraded=degraded or run.degraded,
         )

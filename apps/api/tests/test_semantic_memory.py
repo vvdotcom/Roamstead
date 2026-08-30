@@ -141,3 +141,42 @@ def test_semantic_memory_does_not_change_filters_or_fit_scores(monkeypatch):
     assert [(item["id"], item["fit_score"]) for item in before] == [
         (item["id"], item["fit_score"]) for item in after
     ]
+
+
+def test_profile_save_persists_pending_memory_without_waiting_for_embedding(monkeypatch):
+    async def unexpected_embedding(text: str, task_type: str):
+        raise AssertionError("Profile save must not call the embedding provider")
+
+    monkeypatch.setattr("app.semantic_memory.embed_text", unexpected_embedding)
+    client = TestClient(app)
+    created = client.post("/api/v1/sessions", json={"housing_mode": "BUY"}).json()
+    profile_id = created["session"]["profile_id"]
+    response = client.put(
+        f"/api/v1/profiles/{profile_id}",
+        json={
+            "budget_usd": 250000,
+            "min_beds": 2,
+            "min_baths": 2,
+            "max_international_school_minutes": 30,
+            "max_food_minutes": 15,
+            "property_types": ["House"],
+            "priorities": {
+                "budget": 0.8,
+                "space": 0.8,
+                "healthcare": 0.7,
+                "remote_work": 0.7,
+                "waterfront": 0.4,
+                "quiet": 0.8,
+                "international_school": 0.7,
+                "food_access": 0.7,
+            },
+        },
+    )
+    assert response.status_code == 200
+    memory = next(
+        item
+        for item in listing_catalog.repository.list_semantic_memory(profile_id)
+        if item.source_event_id == f"profile-revision:{profile_id}:v2"
+    )
+    assert memory.embedding_status == "PENDING_EMBEDDING"
+    assert memory.embedding == []

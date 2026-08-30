@@ -35,7 +35,8 @@ class VisualImageInput:
     listing_id: str
     image_index: int
     image_url: str
-    path: Path
+    path: Path | None = None
+    data: bytes | None = None
 
 
 class _RawImageAssessment(BaseModel):
@@ -112,8 +113,11 @@ def _prompt(evidence_packet: list[dict], specialist_outputs: dict[str, str], ima
     )
 
 
-def _prepared_jpeg(path: Path) -> bytes:
-    with Image.open(path) as source:
+def _prepared_jpeg(item: VisualImageInput) -> bytes:
+    source_value = io.BytesIO(item.data) if item.data is not None else item.path
+    if source_value is None:
+        raise ValueError("Visual image input contains neither bytes nor a local path")
+    with Image.open(source_value) as source:
         image = source.convert("RGB")
         image.thumbnail((1280, 1280))
         output = io.BytesIO()
@@ -216,7 +220,7 @@ async def _audit_with_cloud_run(prompt: str, images: list[VisualImageInput]) -> 
         headers["Authorization"] = f"Bearer {await _cloud_run_token(audience)}"
     content: list[dict] = [{"type": "text", "text": prompt}]
     for item in images:
-        encoded = base64.b64encode(_prepared_jpeg(item.path)).decode("ascii")
+        encoded = base64.b64encode(_prepared_jpeg(item)).decode("ascii")
         content.extend(
             [
                 {"type": "text", "text": f"listing_id={item.listing_id}; image_index={item.image_index}"},
@@ -250,7 +254,7 @@ async def _audit_with_gemini_api(prompt: str, images: list[VisualImageInput]) ->
         parts = [types.Part.from_text(text=prompt)]
         for item in images:
             parts.append(types.Part.from_text(text=f"listing_id={item.listing_id}; image_index={item.image_index}"))
-            parts.append(types.Part.from_bytes(data=_prepared_jpeg(item.path), mime_type="image/jpeg"))
+            parts.append(types.Part.from_bytes(data=_prepared_jpeg(item), mime_type="image/jpeg"))
         response = client.models.generate_content(
             model=gemma_model(),
             contents=types.Content(role="user", parts=parts),

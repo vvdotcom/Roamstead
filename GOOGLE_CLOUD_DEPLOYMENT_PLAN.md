@@ -6,11 +6,11 @@ Deploy one production demo environment in `us-central1` with:
 
 - `roamstead-web`: public Next.js Cloud Run service.
 - `roamstead-api`: public FastAPI + Google ADK Cloud Run service, reached by the web service through `/api` and `/agent-stream` proxies.
-- Firestore Native mode: primary durable state for profiles, sessions, revisions, feedback, proposals, 768-dimensional semantic memory, listings, agent runs/events, saves, and Decision Briefs.
+- Firestore Native mode: primary durable state for profiles, sessions, revisions, feedback, proposals, 768-dimensional semantic memory, listings, agent runs/events, saves, Decision Briefs, Decision Watches, and immutable evidence revisions.
 - Cloud Storage: private exact-listing photographs served through the API.
 - Secret Manager: Gemini credential.
 - Pub/Sub: catalog completion/failure events.
-- Cloud Run Job + Cloud Scheduler: weekly real-listing refresh.
+- Cloud Run Job + Cloud Scheduler: bounded weekly maintenance for due real-listing refreshes and approved Decision Watches. The scheduler is paused until one measured execution passes the cost gate.
 - Google Maps JavaScript and Geocoding APIs: browser map.
 - Optional private GPU Cloud Run service for Gemma only after the hosted-Gemma golden path passes.
 
@@ -25,8 +25,8 @@ The app uses an ephemeral SQLite file only as a per-instance cache. It is not th
 | Multi-instance state | Ready | Sessions and profiles hydrate from Firestore after process/cache loss. |
 | Build contexts | Ready | `.dockerignore` and `.gcloudignore` exclude dependencies, caches, logs, tests, and local secrets. |
 | Repository hygiene | Ready | `.gitignore` excludes secrets, databases, downloaded listing assets, logs, build output, and editor files. |
-| Cloud bootstrap | Pending external access | Requires a billing-enabled project, authenticated `gcloud`, Firestore location choice, Gemini secret, and restricted Maps key. |
-| Production data | Pending first job | Run the catalog job once and verify at least 25 qualified Buy and 25 qualified Rent results before public promotion. |
+| Cloud bootstrap | Deployed | Project `roamstead-506707`, Firestore Native, Secret Manager, Storage, Pub/Sub, analytics, and tracing are active in `us-central1`. |
+| Production data | Deployed | Firestore contains 100 real Buy and 100 real Rent records; Cloud Storage contains the exact-listing images served by the API. |
 | Image rights | Manual gate | Confirm permission for public rehosting and preserve source attribution. Do not replace uncertain images with synthetic content. |
 
 “Ready” above means code/configuration has a deployable path; it does not claim that cloud resources already exist.
@@ -135,9 +135,10 @@ Default service limits are intentionally bounded for the hackathon:
 
 | Workload | CPU / memory | Concurrency | Max instances | Timeout |
 |---|---:|---:|---:|---:|
-| API | 2 vCPU / 2 GiB | 20 | 3 | 300 s |
-| Web | 1 vCPU / 512 MiB | 80 | 3 | 300 s |
-| Weekly job | 2 vCPU / 4 GiB | one task | one execution | 3600 s |
+| API | 1 vCPU / 1 GiB | 20 | 1 | 300 s |
+| Web | 1 vCPU / 512 MiB | 80 | 1 | 300 s |
+| Weekly maintenance job | 1 vCPU / 2 GiB | one task | one execution | 3600 s |
+| Agent evaluation job | 1 vCPU / 2 GiB | one task, manual only | one execution | 3600 s |
 
 ## Phase 3 — first real-data seed
 
@@ -164,7 +165,7 @@ gcloud logging read `
   --limit 100
 ```
 
-Keep the Scheduler cadence at `0 9 * * 1` in `Etc/UTC`. Provider failure must leave the last verified Firestore/Storage snapshot intact.
+Keep the Scheduler cadence at `0 9 * * 1` in `Etc/UTC`, but keep it **paused** until one manually executed maintenance run proves the monthly cost envelope. The same job processes at most five due, approved Decision Watches before the due catalog refresh. Provider failure must leave the last verified Firestore/Storage snapshot intact.
 
 ## Phase 4 — automated smoke verification
 
@@ -185,6 +186,39 @@ This checks:
 - at least 25 qualified real Batdongsan listings for Buy and Rent;
 - no synthetic listing flag/source mismatch;
 - Firestore, Pub/Sub, Storage, and scheduled-job resources.
+- the manual ADK evaluation job, metadata-only BigQuery Agent Analytics dataset, and Cloud Trace configuration.
+- a bounded Decision Watch plan that remains `PROPOSED` until approval, then cancels without executing.
+- the weekly Scheduler is still `PAUSED`.
+
+## Phase 4b — run and persist the release evaluation
+
+After a successful, non-degraded three-property Decision Brief, execute the manual evaluation job with that run ID. The job runs the 12 development and 8 held-out validation cases, checks the persisted production trajectory, and writes only sanitized scores and version metadata to Firestore.
+
+The preferred release command automates three consecutive proofs, consumes each real SSE workflow to completion, rejects degraded or fallback model results, runs the 20-case evaluation against the final proof, and invokes the strict deployment verifier:
+
+```powershell
+.\infra\run-production-proof.ps1 `
+  -ProjectId "roamstead-506707" `
+  -Region "us-central1"
+```
+
+Do not run this command until the Gemini API key has available AI Studio prepaid credit. Google Cloud project billing and Gemini API-key prepaid credit are separate controls. A `429 RESOURCE_EXHAUSTED` response remains a failed release gate; configuration-only health output and deterministic fallbacks do not count as model-integration proof.
+
+```powershell
+gcloud run jobs execute roamstead-agent-eval `
+  --project $ProjectId `
+  --region $Region `
+  --args "scripts/run_agent_evaluation.py,--proof-run-id,PROOF_RUN_ID" `
+  --wait
+
+.\infra\verify-deployment.ps1 `
+  -ProjectId $ProjectId `
+  -Region $Region `
+  -ProofRunId "PROOF_RUN_ID" `
+  -RequireEvaluationProof
+```
+
+The UI does not show a passed evaluation badge until this real persisted report clears 100% of the safety and provenance gates, response quality of at least 0.85, and trajectory accuracy of at least 0.90. BigQuery receives metadata-only ADK envelopes: prompts, responses, profiles, images, vectors, tool payloads, credentials, and private reasoning are projected out.
 
 ## Phase 5 — golden staging gate
 
@@ -203,7 +237,9 @@ Manually prove:
 9. A successful Gemma 31B audit contains relevant memory IDs, a typed verdict, public findings, duration, and provider.
 10. Reload restores profile, feedback, saved items, semantic memory, run trace, and brief from Firestore.
 11. Cloud Run logs and Firestore documents visibly prove the same run IDs/model IDs.
-10. A stale or failed provider call uses only the last verified snapshot and displays no synthetic property.
+12. DueDiligencePlanner selects a bounded, property-specific tool plan; no evidence is revised until approval.
+13. An approved watch writes immutable before/after evidence and cancellation prevents later runs.
+14. A stale or failed provider call uses only the last verified snapshot and displays no synthetic property.
 
 ## Security and operations gates
 
@@ -261,6 +297,8 @@ Do not roll back Firestore by deleting collections. Application revisions must r
 - [ ] Every displayed listing has USD price, Batdongsan source, timestamp, and Roamstead-served real photo.
 - [ ] Adaptive proposal/approval/re-ranking persists across reload.
 - [ ] Successful non-degraded Gemma Decision Brief persists across reload.
+- [ ] Approval-gated Decision Watch persists a real before/after evidence revision and cancels cleanly.
+- [ ] Weekly Scheduler remains paused until the measured cost gate passes.
 - [ ] `verify-deployment.ps1` passes.
 - [ ] Three consecutive real staging golden runs pass.
 - [ ] Twenty fixture-backed browser runs pass.

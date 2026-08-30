@@ -109,6 +109,24 @@ async def persist_memory(repository, item: SemanticMemoryItem) -> SemanticMemory
     return item
 
 
+def persist_memory_pending(repository, item: SemanticMemoryItem) -> SemanticMemoryItem:
+    """Persist advisory memory without delaying a consequential user action.
+
+    Profile edits must not wait on an embedding provider. A later retrieval or
+    maintenance pass enriches PENDING_EMBEDDING records idempotently.
+    """
+    existing = repository.get_semantic_memory(item.id)
+    if existing and existing.embedding_status == "READY" and existing.embedding_model == EMBEDDING_MODEL:
+        return existing
+    item.embedding = []
+    item.embedding_status = "PENDING_EMBEDDING"
+    item.embedding_model = EMBEDDING_MODEL
+    item.embedding_dimension = EMBEDDING_DIMENSION
+    item.updated_at = datetime.now(timezone.utc).isoformat()
+    repository.save_semantic_memory(item)
+    return item
+
+
 async def retrieve_memory(
     repository,
     profile_id: str,

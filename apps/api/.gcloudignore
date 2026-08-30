@@ -12,5 +12,4 @@ __pycache__
 *.log
 *.out
 *.err
-tests
 data

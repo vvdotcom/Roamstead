@@ -18,6 +18,7 @@ import {
   Database,
   ExternalLink,
   FileText,
+  Film,
   GraduationCap,
   Heart,
   Home,
@@ -32,6 +33,8 @@ import {
   MessageCircleMore,
   Navigation,
   PanelLeftClose,
+  Pause,
+  Play,
   RotateCcw,
   Route,
   Search,
@@ -41,10 +44,11 @@ import {
   Trees,
   UserRound,
   UtensilsCrossed,
+  Volume2,
   Waves,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import Image from "next/image";
 import {
@@ -52,8 +56,10 @@ import {
   AgentEvent,
   api,
   Candidate,
+  CityOrientation,
   ClarificationTurn,
   DecisionBrief,
+  DecisionWatchResponse,
   Evidence,
   Listing,
   ListingSearchResult,
@@ -66,17 +72,64 @@ import {
 import ListingMap from "./listing-map";
 
 type HousingMode = "BUY" | "RENT";
+type CityName = "Ho Chi Minh City" | "Bangkok" | "Kuala Lumpur";
 
-const GOALS: Record<HousingMode, string> = {
-  BUY: "My family and I are moving from the U.S. to Ho Chi Minh City. Our home budget is $175,000. I work remotely. We want water nearby, healthcare within 30 minutes, and we strongly prefer buying over renting.",
-  RENT: "My family and I are moving from the U.S. to Ho Chi Minh City. Our rent budget is $1,500 per month. I work remotely. We want water nearby, healthcare within 30 minutes, and we want to rent before deciding whether to buy.",
+const MARKETS: Record<CityName, { country: string; short: string }> = {
+  "Ho Chi Minh City": { country: "Vietnam", short: "HCMC" },
+  Bangkok: { country: "Thailand", short: "Bangkok" },
+  "Kuala Lumpur": { country: "Malaysia", short: "Kuala Lumpur" },
 };
+
+const MARKET_BUDGETS: Record<CityName, Record<HousingMode, number>> = {
+  "Ho Chi Minh City": { BUY: 175000, RENT: 1500 },
+  Bangkok: { BUY: 750000, RENT: 2000 },
+  "Kuala Lumpur": { BUY: 700000, RENT: 8000 },
+};
+
+function goalFor(mode: HousingMode, city: CityName) {
+  const budget = MARKET_BUDGETS[city][mode];
+  return mode === "BUY"
+    ? `My family and I are moving from the U.S. to ${city}. Our home budget is $${budget.toLocaleString()}. I work remotely. We want healthcare within 30 minutes, convenient food access, and we prefer buying over renting.`
+    : `My family and I are moving from the U.S. to ${city}. Our rent budget is $${budget.toLocaleString()} per month. I work remotely. We want healthcare within 30 minutes, convenient food access, and we want to rent before deciding whether to buy.`;
+}
+
+function profileDraft(mode: HousingMode, city: CityName): Profile {
+  const rent = mode === "RENT";
+  const budget = MARKET_BUDGETS[city][mode];
+  return {
+    profile_id: "pending",
+    version: 1,
+    hard_constraints: [
+      { key: "city", label: city, operator: "=", value: city, locked: true },
+      { key: rent ? "rent_budget" : "budget", label: rent ? `$${budget.toLocaleString()} monthly rent` : `$${budget.toLocaleString()} purchase budget`, operator: "<=", value: budget, locked: true },
+      { key: "min_beds", label: "At least 1 bedroom", operator: ">=", value: 1, locked: true },
+      { key: "min_baths", label: "At least 1 bathroom", operator: ">=", value: 1, locked: true },
+      { key: "max_international_school_minutes", label: "International school within 30 min", operator: "<=", value: 30, locked: true },
+      { key: "max_food_minutes", label: "Food and daily needs within 15 min", operator: "<=", value: 15, locked: true },
+      { key: "property_types", label: "Apartment or house", operator: "in", value: "Apartment,House", locked: true },
+    ],
+    preferences: [
+      { key: "budget", label: "Stay within budget", weight: 0.9, status: "confirmed" },
+      { key: "space", label: "Bedrooms and bathrooms", weight: 0.65, status: "confirmed" },
+      { key: "healthcare", label: "Healthcare access", weight: 0.75, status: "confirmed" },
+      { key: "remote_work", label: "Reliable remote work", weight: 0.82, status: "confirmed" },
+      { key: "waterfront", label: "Waterfront access", weight: 0.4, status: "confirmed" },
+      { key: "quiet", label: "Quiet neighborhood", weight: 0.2, status: "confirmed" },
+      { key: "international_school", label: "International-school access", weight: 0.65, status: "confirmed" },
+      { key: "food_access", label: "Food and daily-needs proximity", weight: 0.6, status: "confirmed" },
+    ],
+    feedback: [],
+    clarifications: [],
+  };
+}
 
 type Screen = "landing" | "setup" | "results" | "homes";
 
 export default function HomePage() {
+  const [entered, setEntered] = useState(false);
   const [screen, setScreen] = useState<Screen>("landing");
   const [mode, setMode] = useState<HousingMode>("BUY");
+  const [city, setCity] = useState<CityName>("Ho Chi Minh City");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sessionId, setSessionId] = useState("");
@@ -100,9 +153,10 @@ export default function HomePage() {
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [proposalMemory, setProposalMemory] =
     useState<MemoryContextPacket | null>(null);
-  const [clarification, setClarification] = useState<ClarificationTurn | null>(
-    null,
-  );
+  const [clarification, setClarification] =
+    useState<ClarificationTurn | null>(null);
+  const [clarificationBusy, setClarificationBusy] = useState(false);
+  const [clarificationError, setClarificationError] = useState("");
   const [deltas, setDeltas] = useState<RankingDelta[]>([]);
   const [changeExplanation, setChangeExplanation] = useState("");
   const [detail, setDetail] = useState<Listing | null>(null);
@@ -112,6 +166,11 @@ export default function HomePage() {
   const [brief, setBrief] = useState<DecisionBrief | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
   const [briefBusy, setBriefBusy] = useState(false);
+  const [decisionWatch, setDecisionWatch] =
+    useState<DecisionWatchResponse | null>(null);
+  const [watchBusy, setWatchBusy] = useState(false);
+  const [watchError, setWatchError] = useState("");
+  const [watchOpen, setWatchOpen] = useState(false);
   const [activeBriefRunId, setActiveBriefRunId] = useState("");
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [listingDeltas, setListingDeltas] = useState<
@@ -127,6 +186,7 @@ export default function HomePage() {
   const [profileOpen, setProfileOpen] = useState(true);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [mobileMap, setMobileMap] = useState(false);
+  const setupRequest = useRef(0);
 
   const selectedCandidate =
     candidates.find((item) => item.id === selected) ?? candidates[0];
@@ -160,7 +220,11 @@ export default function HomePage() {
 
   useEffect(() => {
     let cancelled = false;
+    const restoreRequest = setupRequest.current;
     async function restoreProfile() {
+      // Warm the scale-to-zero API while the landing page is visible. This is
+      // a cached status read and never invokes Gemini or refreshes listings.
+      void api.warmup().catch(() => undefined);
       const savedProfileId = window.localStorage.getItem(
         "roamstead_profile_id",
       );
@@ -171,16 +235,19 @@ export default function HomePage() {
         return;
       try {
         const restoredProfile = await api.profile(savedProfileId);
-        const [ranked, ruleEvidence, savedListings, savedState, priorBriefs] =
+        const restoredCity = (restoredProfile.hard_constraints.find((item) => item.key === "city")?.value || "Ho Chi Minh City") as CityName;
+        const [ranked, ruleEvidence, savedListings, savedState, priorBriefs, priorWatches] =
           await Promise.all([
             api.neighborhoods(savedProfileId),
             api.evidence(),
-            api.listings(savedMode, savedProfileId),
+            api.listings(savedMode, savedProfileId, undefined, false, restoredCity),
             api.saved(savedProfileId),
             api.briefs(savedProfileId),
+            api.watches(savedProfileId),
           ]);
-        if (cancelled) return;
+        if (cancelled || restoreRequest !== setupRequest.current) return;
         setMode(savedMode);
+        setCity(restoredCity);
         setProfileId(savedProfileId);
         setProfile(restoredProfile);
         setClarification(
@@ -195,6 +262,7 @@ export default function HomePage() {
         setListingSearch(savedListings);
         setSaved(savedState.saved);
         setBrief(priorBriefs.items[0] ?? null);
+        setDecisionWatch(priorWatches.items[0] ?? null);
         setAgentEvents([
           {
             id: "restore-profile",
@@ -215,7 +283,7 @@ export default function HomePage() {
             event_type: "TOOL_RESULT",
             actor: "ListingCatalog",
             title: "Verified snapshot loaded",
-            summary: `${savedListings.returned} real Batdongsan properties loaded without a new Gemini request.`,
+            summary: `${savedListings.returned} verified ${restoredCity} properties restored from the catalog.`,
             status: "COMPLETED",
             public_payload: {},
             created_at: new Date().toISOString(),
@@ -233,11 +301,25 @@ export default function HomePage() {
     };
   }, []);
 
-  async function start() {
+  async function start(
+    nextMode: HousingMode = mode,
+    nextCity: CityName = city,
+  ) {
+    const requestId = ++setupRequest.current;
+    setEntered(true);
+    setMode(nextMode);
+    setCity(nextCity);
     setBusy(true);
     setError("");
+    setSessionId("");
+    setProfileId("");
+    // Open the focused setup immediately. The API call only establishes the
+    // durable profile behind the form; it never blocks the page transition.
+    setProfile(profileDraft(nextMode, nextCity));
+    setScreen("setup");
     try {
-      const created = await api.createSession(mode);
+      const created = await api.createSession(nextMode, nextCity);
+      if (requestId !== setupRequest.current) return;
       setSessionId(created.session.id);
       setProfileId(created.session.profile_id);
       setProfile(created.profile);
@@ -250,20 +332,29 @@ export default function HomePage() {
           actor: "PartnerCoordinator",
           title: "Decision Profile started",
           summary:
-            "Your HCMC buy or rent goal is ready for you to review and customize.",
+            `Your ${nextCity} ${nextMode === "BUY" ? "purchase" : "rental"} goal is ready to review and customize.`,
           status: "COMPLETED",
           public_payload: {},
           created_at: new Date().toISOString(),
         },
       ]);
-      setScreen("setup");
     } catch {
+      if (requestId !== setupRequest.current) return;
+      setProfile(null);
       setError(
         "The Roamstead API is not reachable. Start the FastAPI service on port 8000, then try again.",
       );
     } finally {
-      setBusy(false);
+      if (requestId === setupRequest.current) setBusy(false);
     }
+  }
+
+  function leaveSetup() {
+    setupRequest.current += 1;
+    setEntered(false);
+    setScreen("landing");
+    setBusy(false);
+    setError("");
   }
 
   function changeMode(nextMode: HousingMode) {
@@ -287,6 +378,8 @@ export default function HomePage() {
     setRejected([]);
     setProposal(null);
     setClarification(null);
+    setClarificationBusy(false);
+    setClarificationError("");
     setDeltas([]);
     setChangeExplanation("");
     setDetail(null);
@@ -294,6 +387,9 @@ export default function HomePage() {
     setCompare([]);
     setPlan(null);
     setBrief(null);
+    setDecisionWatch(null);
+    setWatchError("");
+    setWatchOpen(false);
     setBriefOpen(false);
     setAgentEvents([]);
     setListingDeltas([]);
@@ -302,53 +398,34 @@ export default function HomePage() {
     window.localStorage.removeItem("roamstead_housing_mode");
   }
 
+  function changeCity(nextCity: CityName) {
+    if (nextCity === city) return;
+    setCity(nextCity);
+    setScreen("landing");
+    setSessionId("");
+    setProfileId("");
+    setProfile(null);
+    setCandidates([]);
+    setListings([]);
+    setListingSearch(null);
+    setListingError("");
+    setListingPage(1);
+    setDetail(null);
+    setSaved([]);
+    setCompare([]);
+    setBrief(null);
+    setDecisionWatch(null);
+    setAgentEvents([]);
+    window.localStorage.removeItem("roamstead_profile_id");
+    window.localStorage.removeItem("roamstead_housing_mode");
+  }
+
   async function saveProfile(update: ProfileUpdate, onboarding = false) {
     setBusy(true);
     setError("");
+    let result: Awaited<ReturnType<typeof api.updateProfile>>;
     try {
-      const result = await api.updateProfile(profileId, update);
-      setProfile(result.profile);
-      setCandidates(result.recommendations);
-      setDeltas(result.deltas);
-      const focus = result.recommendations[0]?.id ?? "";
-      setSelected(focus);
-      setEvidence(await api.evidence());
-      window.localStorage.setItem("roamstead_profile_id", profileId);
-      window.localStorage.setItem("roamstead_housing_mode", mode);
-      setProfileEditorOpen(false);
-      setDetail(null);
-      setScreen("homes");
-      await searchLiveListings(false, focus, profileId, mode);
-      const clarificationResult = await api.clarification(profileId);
-      setClarification(clarificationResult.question ?? null);
-      setAgentEvents([
-        {
-          id: "profile-write",
-          run_id: sessionId || "profile",
-          sequence: 1,
-          event_type: "TOOL_RESULT",
-          actor: "ProfileStore",
-          title: "Decision Profile saved",
-          summary: `Profile v${result.profile.version} was written to the local database with revision history.`,
-          status: "COMPLETED",
-          public_payload: {},
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: "fit-score",
-          run_id: sessionId || "profile",
-          sequence: 2,
-          event_type: "TOOL_RESULT",
-          actor: "FitScoreTool",
-          title: "Eligible matches scored",
-          summary:
-            "Only listings meeting your property type, budget, bedroom, and bathroom requirements are ranked. Gemini does not calculate the numeric Fit Score.",
-          status: "COMPLETED",
-          public_payload: {},
-          created_at: new Date().toISOString(),
-        },
-        ...clarificationResult.events,
-      ]);
+      result = await api.updateProfile(profileId, update);
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -356,8 +433,135 @@ export default function HomePage() {
           : "Your profile changes could not be saved.",
       );
       if (!onboarding) setProfileEditorOpen(true);
-    } finally {
       setBusy(false);
+      return;
+    }
+
+    // Durable profile persistence is the completion boundary. Close the
+    // editor immediately; listing refresh cannot reopen a saved form.
+    setProfile(result.profile);
+    setCandidates(result.recommendations);
+    setDeltas(result.deltas);
+    const focus = result.recommendations[0]?.id ?? "";
+    setSelected(focus);
+    window.localStorage.setItem("roamstead_profile_id", profileId);
+    window.localStorage.setItem("roamstead_housing_mode", mode);
+    setProfileEditorOpen(false);
+    setDetail(null);
+    setScreen("homes");
+    setBusy(false);
+    const savedEvents: AgentEvent[] = [
+      {
+        id: "profile-write",
+        run_id: sessionId || "profile",
+        sequence: 1,
+        event_type: "TOOL_RESULT",
+        actor: "ProfileStore",
+        title: "Decision Profile saved",
+        summary: `Profile v${result.profile.version} was written to the database with revision history.`,
+        status: "COMPLETED",
+        public_payload: {},
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "fit-score",
+        run_id: sessionId || "profile",
+        sequence: 2,
+        event_type: "TOOL_RESULT",
+        actor: "FitScoreTool",
+        title: "Eligible matches scored",
+        summary:
+          "Only listings meeting your property type, budget, bedroom, and bathroom requirements are ranked. The Fit Score is deterministic and explainable.",
+        status: "COMPLETED",
+        public_payload: {},
+        created_at: new Date().toISOString(),
+      },
+    ];
+    setAgentEvents(savedEvents);
+
+    void api.evidence().then(setEvidence).catch(() => undefined);
+    void searchLiveListings(false, focus, profileId, mode);
+    if (onboarding && city === "Ho Chi Minh City") {
+      void requestAdaptiveClarification(profileId);
+    } else if (onboarding) {
+      // Expansion markets use their verified city catalog and deterministic
+      // Fit Scores without borrowing HCMC's neighborhood tradeoff universe.
+      setClarification(null);
+      setClarificationBusy(false);
+      setClarificationError("");
+    }
+  }
+
+  async function requestAdaptiveClarification(activeProfileId = profileId) {
+    if (!activeProfileId) return;
+    setClarificationBusy(true);
+    setClarificationError("");
+    try {
+      const result = await api.clarification(activeProfileId);
+      setClarification(result.question ?? null);
+      setAgentEvents((current) => [
+        ...current,
+        ...result.events.filter(
+          (event) => !current.some((existing) => existing.id === event.id),
+        ),
+      ]);
+    } catch {
+      // The Cloud Run proxy can disconnect while the durable clarification
+      // run continues. Recover the persisted question instead of presenting a
+      // false failure or spending a second model request.
+      let recovered: ClarificationTurn | null = null;
+      for (let attempt = 0; attempt < 8 && !recovered; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2500));
+        try {
+          const restored = await api.profile(activeProfileId);
+          recovered =
+            [...restored.clarifications]
+              .reverse()
+              .find((item) => item.status === "AWAITING_ANSWER") ?? null;
+        } catch {
+          // The next bounded read may recover after a transient cold start.
+        }
+      }
+      if (recovered) {
+        setClarification(recovered);
+      } else {
+        setClarificationError(
+          "Roamstead could not calculate a useful clarification from this profile.",
+        );
+      }
+    } finally {
+      setClarificationBusy(false);
+    }
+  }
+
+  async function answerAdaptiveClarification(optionId: string) {
+    if (!profileId || !clarification) return;
+    setClarificationBusy(true);
+    setClarificationError("");
+    try {
+      const result = await api.answerClarification(
+        profileId,
+        clarification.id,
+        optionId,
+      );
+      setProfile(result.profile);
+      setClarification(null);
+      setAgentEvents((current) => [
+        ...current,
+        ...result.events.filter(
+          (event) => !current.some((existing) => existing.id === event.id),
+        ),
+      ]);
+      if (result.proposal) {
+        setProposal(result.proposal);
+        setProposalMemory(null);
+      }
+    } catch {
+      setClarificationError(
+        "Your answer could not be saved. Your profile and ranking are unchanged.",
+      );
+    } finally {
+      setClarificationBusy(false);
     }
   }
 
@@ -375,6 +579,7 @@ export default function HomePage() {
         activeProfileId,
         focusedNeighborhoodId || undefined,
         refresh,
+        city,
       );
       setListings(result.items);
       setListingSearch(result);
@@ -438,7 +643,7 @@ export default function HomePage() {
       setProposal(null);
       setProposalMemory(null);
       if (decision !== "REJECT") {
-        const refreshed = await api.listings(mode, profileId);
+        const refreshed = await api.listings(mode, profileId, undefined, false, city);
         setListings(refreshed.items);
         setListingSearch(refreshed);
         setListingDeltas(
@@ -467,30 +672,6 @@ export default function HomePage() {
         );
         setListingPage(1);
       }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function answerAdaptiveClarification(optionId: string) {
-    if (!clarification || !profileId) return;
-    setBusy(true);
-    try {
-      const result = await api.answerClarification(
-        profileId,
-        clarification.id,
-        optionId,
-      );
-      setProfile(result.profile);
-      setClarification(null);
-      setAgentEvents(result.events);
-      if (result.proposal) setProposal(result.proposal);
-    } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "The clarification answer could not be saved.",
-      );
     } finally {
       setBusy(false);
     }
@@ -568,16 +749,125 @@ export default function HomePage() {
       setError(
         caught instanceof Error
           ? caught.message
-          : "The saved agent trace could not be restored.",
+          : "The saved decision history could not be restored.",
       );
     }
+  }
+
+  async function proposeDecisionWatch() {
+    if (!brief || !profileId || brief.properties.length !== 3) return;
+    setWatchBusy(true);
+    setWatchError("");
+    try {
+      setDecisionWatch(
+        await api.createWatch(
+          profileId,
+          brief.properties.map((property) => property.listing_id),
+        ),
+      );
+    } catch (caught) {
+      setWatchError(
+        caught instanceof Error
+          ? caught.message
+          : "The Decision Watch plan could not be created.",
+      );
+    } finally {
+      setWatchBusy(false);
+    }
+  }
+
+  async function proposeDecisionWatchFromCompare() {
+    if (compare.length !== 3 || !profileId) return;
+    setWatchBusy(true);
+    setWatchError("");
+    try {
+      setDecisionWatch(await api.createWatch(profileId, compare));
+      setWatchOpen(true);
+    } catch (caught) {
+      setWatchError(
+        caught instanceof Error
+          ? caught.message
+          : "The Decision Watch plan could not be created.",
+      );
+    } finally {
+      setWatchBusy(false);
+    }
+  }
+
+  async function approveDecisionWatch() {
+    if (!decisionWatch) return;
+    setWatchBusy(true);
+    setWatchError("");
+    try {
+      setDecisionWatch(await api.approveWatch(decisionWatch.watch.id, true));
+    } catch (caught) {
+      setWatchError(
+        caught instanceof Error
+          ? caught.message
+          : "The approved Decision Watch could not run.",
+      );
+    } finally {
+      setWatchBusy(false);
+    }
+  }
+
+  async function cancelDecisionWatch() {
+    if (!decisionWatch) return;
+    setWatchBusy(true);
+    setWatchError("");
+    try {
+      setDecisionWatch(await api.cancelWatch(decisionWatch.watch.id));
+    } catch (caught) {
+      setWatchError(
+        caught instanceof Error
+          ? caught.message
+          : "The Decision Watch could not be canceled.",
+      );
+    } finally {
+      setWatchBusy(false);
+    }
+  }
+
+  if (!entered) {
+    return <PublicLanding onEnter={() => void start()} />;
+  }
+
+  if (screen === "setup" && profile) {
+    return (
+      <main className="onboarding-shell">
+        <header className="onboarding-header">
+          <div className="brand">
+            <span className="brand-mark">
+              <Navigation size={17} fill="currentColor" />
+            </span>
+            <span>Roamstead</span>
+          </div>
+          <span>Your cross-border matching profile</span>
+        </header>
+        <ProfileSetup
+          key={`${mode}:${city}:${profile.profile_id}`}
+          mode={mode}
+          city={city}
+          profile={profile}
+          busy={busy}
+          error={error}
+          onboarding
+          onMode={(nextMode) => void start(nextMode, city)}
+          onCity={(nextCity) => void start(mode, nextCity)}
+          onSave={(update) => saveProfile(update, true)}
+          onClose={leaveSetup}
+        />
+      </main>
+    );
   }
 
   return (
     <main className="app-shell">
       <Header
         mode={mode}
+        city={city}
         onMode={changeMode}
+        onCity={changeCity}
         savedCount={saved.length}
         profileOpen={profileOpen}
         onProfile={() => setProfileOpen((open) => !open)}
@@ -604,6 +894,7 @@ export default function HomePage() {
           {screen === "landing" && (
             <Landing
               mode={mode}
+              city={city}
               busy={busy}
               error={error}
               onStart={start}
@@ -613,6 +904,7 @@ export default function HomePage() {
           {screen === "setup" && profile && (
             <ProfileSetup
               mode={mode}
+              city={city}
               profile={profile}
               busy={busy}
               error={error}
@@ -624,6 +916,7 @@ export default function HomePage() {
           {screen === "homes" && (
             <Discovery
               mode={mode}
+              city={city}
               profile={profile}
               onMode={changeMode}
               screen={screen}
@@ -648,6 +941,9 @@ export default function HomePage() {
               explanation={changeExplanation}
               agentEvents={agentEvents}
               priorBrief={brief}
+              clarification={clarification}
+              clarificationBusy={clarificationBusy}
+              clarificationError={clarificationError}
               onSelect={setSelected}
               onFeedback={setFeedbackTarget}
               onReason={leaveFeedback}
@@ -678,12 +974,14 @@ export default function HomePage() {
               }
               onEditProfile={() => setProfileEditorOpen(true)}
               onOpenBrief={openSavedBrief}
+              onClarificationAnswer={answerAdaptiveClarification}
             />
           )}
         </section>
         {screen !== "homes" && screen !== "setup" && (
           <MapPanel
             landing
+            city={city}
             candidates={candidates}
             selected={selectedCandidate?.id}
             onSelect={setSelected}
@@ -716,13 +1014,6 @@ export default function HomePage() {
         </button>
       )}
 
-      {clarification && !proposal && (
-        <ClarificationPrompt
-          clarification={clarification}
-          busy={busy}
-          onAnswer={answerAdaptiveClarification}
-        />
-      )}
       {proposal && (
         <PreferencePrompt
           proposal={proposal}
@@ -735,6 +1026,7 @@ export default function HomePage() {
         <div className="modal-backdrop profile-editor-backdrop">
           <ProfileSetup
             mode={mode}
+            city={city}
             profile={profile}
             busy={busy}
             error={error}
@@ -766,6 +1058,19 @@ export default function HomePage() {
         <DecisionBriefModal
           brief={brief}
           events={agentEvents.filter((event) => event.run_id === brief.run_id)}
+          watch={
+            decisionWatch &&
+            brief.properties.every((property) =>
+              decisionWatch.watch.listing_ids.includes(property.listing_id),
+            )
+              ? decisionWatch
+              : null
+          }
+          watchBusy={watchBusy}
+          watchError={watchError}
+          onProposeWatch={proposeDecisionWatch}
+          onApproveWatch={approveDecisionWatch}
+          onCancelWatch={cancelDecisionWatch}
           onClose={() => setBriefOpen(false)}
         />
       )}
@@ -779,6 +1084,17 @@ export default function HomePage() {
           }
         />
       )}
+      {decisionWatch && watchOpen && (
+        <DecisionWatchModal
+          response={decisionWatch}
+          listings={listings}
+          busy={watchBusy}
+          error={watchError}
+          onApprove={approveDecisionWatch}
+          onCancel={cancelDecisionWatch}
+          onClose={() => setWatchOpen(false)}
+        />
+      )}
       {compare.length > 0 && (
         <div className="compare-tray">
           <div>
@@ -787,11 +1103,21 @@ export default function HomePage() {
           </div>
           {compare.length === 3 && (
             <button
+              className="brief-tray-watch"
+              onClick={proposeDecisionWatchFromCompare}
+              disabled={watchBusy}
+            >
+              {watchBusy ? "Planning..." : "Plan Decision Watch"}
+              <Activity size={15} />
+            </button>
+          )}
+          {compare.length === 3 && (
+            <button
               className="brief-tray-cta"
               onClick={buildDecisionBrief}
               disabled={briefBusy}
             >
-              {briefBusy ? "Agents working…" : "Build Decision Brief"}
+              {briefBusy ? "Building brief…" : "Build Decision Brief"}
               <FileText size={15} />
             </button>
           )}
@@ -802,19 +1128,85 @@ export default function HomePage() {
   );
 }
 
+function PublicLanding({ onEnter }: { onEnter: () => void }) {
+  return (
+    <main className="public-landing">
+      <nav className="public-nav">
+        <div className="brand public-brand">
+          <span className="brand-mark"><Navigation size={18} fill="currentColor" /></span>
+          <span>Roamstead</span>
+        </div>
+        <div className="public-nav-links">
+          <a href="#markets">Markets</a>
+          <a href="#how-it-works">How it works</a>
+        </div>
+        <button className="public-login" onClick={onEnter}>Demo login <ArrowRight size={16} /></button>
+      </nav>
+      <section className="public-hero">
+        <div className="public-hero-copy">
+          <span className="public-kicker"><MapPin size={15} /> Cross-border homes, matched to your life</span>
+          <h1>Find your place in<br /><em>Southeast Asia.</em></h1>
+          <p>
+            Compare real homes across unfamiliar markets with prices in U.S. dollars,
+            clear tradeoffs, and a fit profile that stays under your control.
+          </p>
+          <div className="public-hero-actions">
+            <button className="primary public-cta" onClick={onEnter}>Explore with demo access <ArrowRight size={18} /></button>
+            <span><ShieldCheck size={16} /> No account or payment required</span>
+          </div>
+          <div className="public-proof">
+            <div><b>240</b><span>verified homes</span></div>
+            <div><b>3</b><span>city markets</span></div>
+            <div><b>USD</b><span>normalized prices</span></div>
+          </div>
+        </div>
+        <div className="public-hero-visual" aria-label="Roamstead property matching preview">
+          <div className="hero-map-grid" />
+          <div className="hero-location-card hcmc"><span>92</span><b>Ho Chi Minh City</b><small>Best overall fit</small></div>
+          <div className="hero-location-card bangkok"><span>86</span><b>Bangkok</b><small>Urban access</small></div>
+          <div className="hero-location-card kl"><span>89</span><b>Kuala Lumpur</b><small>Space & value</small></div>
+          <div className="hero-home-card">
+            <div className="hero-home-image" />
+            <div><small>TOP MATCH</small><b>Riverside family home</b><span>$168,400 · 3 bd · 2 ba</span></div>
+          </div>
+        </div>
+      </section>
+      <section className="market-ribbon" id="markets">
+        <div><span className="market-flag vn">VN</span><p><b>Ho Chi Minh City</b><small>Full decision experience</small></p></div>
+        <div><span className="market-flag th">TH</span><p><b>Bangkok</b><small>20 verified properties</small></p></div>
+        <div><span className="market-flag my">MY</span><p><b>Kuala Lumpur</b><small>20 verified properties</small></p></div>
+        <p className="expansion-note">Built for the next generation of Southeast Asian relocation.</p>
+      </section>
+      <section className="public-how" id="how-it-works">
+        <span>One profile. Clearer decisions.</span>
+        <h2>Housing search that learns with you—not around you.</h2>
+        <div>
+          <article><b>01</b><h3>Set your requirements</h3><p>Lock budget, home type, bedrooms, bathrooms, schools, food, and lifestyle priorities.</p></article>
+          <article><b>02</b><h3>Compare genuine fit</h3><p>Hard requirements filter first. Every remaining home gets an explainable, personal score.</p></article>
+          <article><b>03</b><h3>Build a decision brief</h3><p>Turn three finalists into an evidence-backed comparison with questions and next steps.</p></article>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function Header({
   mode,
+  city,
   savedCount,
   profileOpen,
   onMode,
+  onCity,
   onProfile,
   onPlan,
   canPlan,
 }: {
   mode: HousingMode;
+  city: CityName;
   savedCount: number;
   profileOpen: boolean;
   onMode: (mode: HousingMode) => void;
+  onCity: (city: CityName) => void;
   onProfile: () => void;
   onPlan: () => void;
   canPlan: boolean;
@@ -844,8 +1236,9 @@ function Header({
       </nav>
       <div className="location-pill">
         <MapPin size={16} />
-        <span>Ho Chi Minh City, Vietnam</span>
-        <span className="scope-dot">MVP</span>
+        <select value={city} onChange={(event) => onCity(event.target.value as CityName)} aria-label="Choose city">
+          {(Object.keys(MARKETS) as CityName[]).map((market) => <option key={market} value={market}>{market}, {MARKETS[market].country}</option>)}
+        </select>
       </div>
       <div className="header-actions">
         <button className="icon-label">
@@ -909,12 +1302,14 @@ function SideNav({
 
 function Landing({
   mode,
+  city,
   busy,
   error,
   onStart,
   onMode,
 }: {
   mode: HousingMode;
+  city: CityName;
   busy: boolean;
   error: string;
   onStart: () => void;
@@ -923,10 +1318,10 @@ function Landing({
   return (
     <div className="landing">
       <div className="eyebrow">
-        <Sparkles size={15} /> Your collaborative housing partner
+        <Compass size={15} /> Your cross-border housing partner
       </div>
       <h1>
-        Where in HCMC
+        Where in {MARKETS[city].short}
         <br />
         fits your <em>life?</em>
       </h1>
@@ -956,9 +1351,9 @@ function Landing({
         <div className="goal-box-top">
           <MessageCircleMore size={18} />
           <span>Tell Roamstead what you’re looking for</span>
-          <span className="preset">Demo goal</span>
+          <span className="preset">Example move</span>
         </div>
-        <p>{GOALS[mode]}</p>
+        <p>{goalFor(mode, city)}</p>
         <button
           className="primary start-button"
           onClick={onStart}
@@ -990,8 +1385,8 @@ function Landing({
           <MapPin size={16} />
         </span>
         <div>
-          <b>Focused for this MVP</b>
-          <p>Verified properties in Ho Chi Minh City. More cities come next.</p>
+          <b>{city}, {MARKETS[city].country}</b>
+          <p>{city === "Ho Chi Minh City" ? "Our flagship market with the complete decision workflow." : "A curated launch catalog with 20 verified properties."}</p>
         </div>
       </div>
     </div>
@@ -1064,18 +1459,24 @@ function priorityLabel(value: number) {
 
 function ProfileSetup({
   mode,
+  city,
   profile,
   busy,
   error,
   onboarding = false,
+  onMode,
+  onCity,
   onSave,
   onClose,
 }: {
   mode: HousingMode;
+  city: CityName;
   profile: Profile;
   busy: boolean;
   error: string;
   onboarding?: boolean;
+  onMode?: (mode: HousingMode) => void;
+  onCity?: (city: CityName) => void;
   onSave: (update: ProfileUpdate) => void;
   onClose: () => void;
 }) {
@@ -1096,10 +1497,11 @@ function ProfileSetup({
     storedTypes.push("House");
   if (!storedTypes.length) storedTypes.push("Apartment", "House");
   const [form, setForm] = useState<ProfileUpdate>({
+    city,
     budget_usd: constraintValue(
       profile,
       mode === "RENT" ? "rent_budget" : "budget",
-      mode === "RENT" ? 1500 : 175000,
+      MARKET_BUDGETS[city][mode],
     ),
     min_beds: constraintValue(profile, "min_beds", 1),
     min_baths: constraintValue(profile, "min_baths", 1),
@@ -1117,6 +1519,45 @@ function ProfileSetup({
       ]),
     ),
   });
+  const [orientations, setOrientations] = useState<CityOrientation[]>([]);
+  const [narrationPlaying, setNarrationPlaying] = useState(false);
+  const narrationRef = useRef<HTMLAudioElement>(null);
+  const orientation = orientations.find((item) => item.city === city);
+  const orientationReady =
+    orientation?.video_status === "READY" &&
+    orientation?.narration_status === "READY";
+
+  useEffect(() => {
+    let active = true;
+    api.cityOrientations()
+      .then((result) => {
+        if (active) setOrientations(result.items);
+      })
+      .catch(() => {
+        if (active) setOrientations([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setForm((current) => ({ ...current, city }));
+    narrationRef.current?.pause();
+    setNarrationPlaying(false);
+  }, [city]);
+
+  async function toggleNarration() {
+    const audio = narrationRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      await audio.play();
+      setNarrationPlaying(true);
+    } else {
+      audio.pause();
+      setNarrationPlaying(false);
+    }
+  }
 
   function togglePropertyType(
     propertyType: ProfileUpdate["property_types"][number],
@@ -1159,9 +1600,112 @@ function ProfileSetup({
         </button>
       </div>
 
+      {onboarding && onMode && onCity && (
+        <div className="profile-market-section">
+          <div className="profile-form-title">
+            <span>1</span>
+            <div>
+              <h3>Choose your market</h3>
+              <p>Select where you are moving and whether you want to buy or rent.</p>
+            </div>
+          </div>
+          <div className="profile-market-controls">
+            <label>
+              <span>Destination city</span>
+              <div className="profile-city-select">
+                <MapPin size={18} />
+                <select
+                  aria-label="Choose city"
+                  value={city}
+                  disabled={busy}
+                  onChange={(event) => onCity(event.target.value as CityName)}
+                >
+                  {(Object.keys(MARKETS) as CityName[]).map((market) => (
+                    <option key={market} value={market}>
+                      {market}, {MARKETS[market].country}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </label>
+            <div>
+              <span>Housing plan</span>
+              <div className="profile-mode-select" role="group" aria-label="Choose buy or rent">
+                <button
+                  type="button"
+                  className={mode === "BUY" ? "selected" : ""}
+                  disabled={busy}
+                  onClick={() => onMode("BUY")}
+                >
+                  <Building2 size={16} /> Buy
+                </button>
+                <button
+                  type="button"
+                  className={mode === "RENT" ? "selected" : ""}
+                  disabled={busy}
+                  onClick={() => onMode("RENT")}
+                >
+                  <Home size={16} /> Rent
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="market-availability">
+            <Check size={15} />
+            <span>
+              Verified listings are ready for {city}. Prices are normalized to U.S. dollars.
+            </span>
+          </div>
+          {orientationReady && orientation && (
+            <article className="city-orientation" data-city={orientation.slug}>
+              <div className="city-orientation-media">
+                <video
+                  key={orientation.video_url}
+                  src={orientation.video_url}
+                  muted
+                  autoPlay
+                  loop
+                  playsInline
+                  preload="metadata"
+                  aria-label={`${orientation.city} generated city orientation`}
+                />
+                <span><Film size={14} /> City orientation</span>
+              </div>
+              <div className="city-orientation-copy">
+                <span className="city-orientation-kicker">Get a feel for {orientation.city}</span>
+                <h4>{orientation.headline}</h4>
+                <p>{orientation.transcript}</p>
+                <audio
+                  ref={narrationRef}
+                  key={orientation.audio_url}
+                  src={orientation.audio_url}
+                  preload="metadata"
+                  onEnded={() => setNarrationPlaying(false)}
+                />
+                <button
+                  type="button"
+                  className="narration-button"
+                  onClick={toggleNarration}
+                  aria-label={`${narrationPlaying ? "Pause" : "Play"} ${orientation.city} narrated brief`}
+                >
+                  {narrationPlaying ? <Pause size={15} /> : <Play size={15} />}
+                  {narrationPlaying ? "Pause city brief" : "Play narrated city brief"}
+                  <Volume2 size={14} />
+                </button>
+                <div className="city-model-proof" aria-label="City orientation model proof">
+                  <span>{orientation.video_model}</span>
+                  <span>{orientation.narration_model}</span>
+                </div>
+                <small>{orientation.disclaimer}</small>
+              </div>
+            </article>
+          )}
+        </div>
+      )}
+
       <div className="profile-form-section">
         <div className="profile-form-title">
-          <span>1</span>
+          <span>{onboarding ? "2" : "1"}</span>
           <div>
             <h3>Your search criteria</h3>
             <p>These define the practical shape of your search.</p>
@@ -1268,7 +1812,7 @@ function ProfileSetup({
 
       <div className="profile-form-section priorities-section">
         <div className="profile-form-title">
-          <span>2</span>
+          <span>{onboarding ? "3" : "2"}</span>
           <div>
             <h3>What matters most?</h3>
             <p>Your importance settings become the weights behind Fit Score.</p>
@@ -1322,8 +1866,8 @@ function ProfileSetup({
         <div>
           <ShieldCheck size={17} />
           <span>
-            Your profile is saved locally and Gemini does not calculate Fit
-            Score.
+            Your profile and revision history are saved securely. Fit Scores
+            remain rule-based and explainable.
           </span>
         </div>
         <button
@@ -1332,7 +1876,9 @@ function ProfileSetup({
           onClick={() => onSave(form)}
         >
           {busy
-            ? "Saving profile…"
+            ? onboarding
+              ? "Preparing profile…"
+              : "Saving profile…"
             : onboarding
               ? "Show my matches"
               : "Save and recalculate"}
@@ -1448,6 +1994,7 @@ const FIT_FACTOR_LABELS: Record<string, string> = {
 
 function Discovery(props: {
   mode: HousingMode;
+  city: CityName;
   onMode: (mode: HousingMode) => void;
   profile: Profile | null;
   screen: Screen;
@@ -1479,6 +2026,9 @@ function Discovery(props: {
   explanation: string;
   agentEvents: AgentEvent[];
   priorBrief: DecisionBrief | null;
+  clarification: ClarificationTurn | null;
+  clarificationBusy: boolean;
+  clarificationError: string;
   onSelect: (id: string) => void;
   onFeedback: (id: string) => void;
   onReason: (item: Candidate | Listing, reason: string, note?: string) => void;
@@ -1493,9 +2043,11 @@ function Discovery(props: {
   onCompare: (id: string) => void;
   onEditProfile: () => void;
   onOpenBrief: () => void;
+  onClarificationAnswer: (optionId: string) => void;
 }) {
   const {
     mode,
+    city,
     profile,
     screen,
     candidates,
@@ -1519,6 +2071,9 @@ function Discovery(props: {
     explanation,
     agentEvents,
     priorBrief,
+    clarification,
+    clarificationBusy,
+    clarificationError,
   } = props;
   const budget = profile?.hard_constraints.find(
     (item) => item.key === (mode === "RENT" ? "rent_budget" : "budget"),
@@ -1540,7 +2095,7 @@ function Discovery(props: {
     <div className="discovery">
       <div className="discovery-toolbar">
         <div>
-          <span className="eyebrow plain">Ho Chi Minh City</span>
+          <span className="eyebrow plain">{city}, {MARKETS[city].country}</span>
           <h2>Properties matched to your profile</h2>
         </div>
       </div>
@@ -1723,14 +2278,19 @@ function Discovery(props: {
             priorBrief={priorBrief}
             onOpenBrief={props.onOpenBrief}
           />
+          <AdaptiveClarification
+            clarification={clarification}
+            busy={clarificationBusy}
+            error={clarificationError}
+            onAnswer={props.onClarificationAnswer}
+          />
           <div className="live-source-bar">
             <div>
               <Sparkles size={17} />
               <span>
-                <b>Gemini weekly listing catalog</b>
+                <b>Verified property catalog</b>
                 <small>
-                  Every published property includes a validated local photo · no
-                  synthetic fallback
+                  Every property includes a source page, observed date, and locally served photo
                 </small>
               </span>
             </div>
@@ -1751,8 +2311,7 @@ function Discovery(props: {
               </span>
               <h3>Calculating matches from your saved profile</h3>
               <p>
-                Properties load from the local database; this does not make a
-                new Gemini request.
+                Properties load from the database without another source request.
               </p>
             </div>
           )}
@@ -2098,6 +2657,13 @@ const BRIEF_STAGES = [
     optional: false,
   },
   {
+    phase: "CRITIC_JOIN",
+    label: "Parallel critic results joined",
+    actor: "CriticJoin",
+    model: "ADK JoinNode",
+    optional: false,
+  },
+  {
     phase: "EVIDENCE_VERIFICATION",
     label: "Evidence verification",
     actor: "EvidenceVerifier",
@@ -2105,10 +2671,10 @@ const BRIEF_STAGES = [
     optional: false,
   },
   {
-    phase: "CORRECTION",
-    label: "Bounded correction",
-    actor: "PartnerCoordinator",
-    model: "Only if challenged",
+    phase: "CORRECTION_ROUTE",
+    label: "Deterministic correction route",
+    actor: "CorrectionRouter",
+    model: "ADK FunctionNode",
     optional: true,
   },
   {
@@ -2202,7 +2768,7 @@ function DecisionBriefBuildModal({
           </span>
           <ArrowRight size={14} />
           <span>
-            <Bot size={16} /> Gemini analysis
+            <FileText size={16} /> Evidence analysis
           </span>
           <ArrowRight size={14} />
           <span className="gemma-model">
@@ -2266,6 +2832,11 @@ function DecisionBriefBuildModal({
                   <b>{currentEvent.actor}</b>
                   <p>{currentEvent.title}</p>
                   <small>{currentEvent.summary}</small>
+                  <span className="node-proof">
+                    {currentEvent.node_kind ?? "EVENT"}
+                    {currentEvent.parallel_group &&
+                      ` · parallel ${currentEvent.parallel_group}`}
+                  </span>
                   {currentEvent.duration_ms !== undefined && (
                     <em>
                       {(currentEvent.duration_ms / 1000).toFixed(1)}s ·{" "}
@@ -2302,12 +2873,12 @@ function AgentActivity({
 }) {
   const visible = events.slice(-4);
   return (
-    <section className="agent-activity" aria-label="Agent and tool activity">
+    <section className="agent-activity" aria-label="Decision activity">
       <div className="activity-heading">
         <div>
           <Activity size={16} />
-          <span>Partner activity</span>
-          <small>Public summaries only</small>
+          <span>Decision activity</span>
+          <small>Your latest profile checks</small>
         </div>
         {priorBrief && (
           <button onClick={onOpenBrief}>
@@ -2344,12 +2915,87 @@ function AgentActivity({
           <div>
             <Bot size={14} />
             <span>
-              <b>Partner ready</b>
-              <small>Activity and evidence checks will appear here.</small>
+              <b>Ready to refine your matches</b>
+              <small>Profile and evidence checks will appear here.</small>
             </span>
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+function AdaptiveClarification({
+  clarification,
+  busy,
+  error,
+  onAnswer,
+}: {
+  clarification: ClarificationTurn | null;
+  busy: boolean;
+  error: string;
+  onAnswer: (optionId: string) => void;
+}) {
+  if (!clarification && !busy && !error) return null;
+
+  return (
+    <section
+      className={`adaptive-clarification${busy ? " is-busy" : ""}`}
+      aria-label="Adaptive decision question"
+      aria-busy={busy}
+    >
+      <header>
+        <span className="adaptive-icon">
+          {busy ? <RotateCcw size={18} /> : <Sparkles size={18} />}
+        </span>
+        <div>
+          <span>Adaptive decision question</span>
+          <b>Personalized ranking analysis</b>
+        </div>
+      </header>
+
+      {clarification ? (
+        <>
+          <h3>{clarification.question}</h3>
+          <p>{clarification.why_asked}</p>
+          <div className="adaptive-options">
+            {clarification.options.map((option) => (
+              <button
+                key={option.id}
+                className="adaptive-option"
+                disabled={busy}
+                onClick={() => onAnswer(option.id)}
+              >
+                <span>{option.label}</span>
+                <small>{option.impact_summary}</small>
+                {option.predicted_top_changes > 0 && (
+                  <em>
+                    {option.predicted_top_changes} predicted top-ten rank
+                    {option.predicted_top_changes === 1 ? " change" : " changes"}
+                  </em>
+                )}
+              </button>
+            ))}
+          </div>
+          <footer>
+            <ShieldCheck size={15} /> Your answer creates a proposal only. Fit
+            Scores change only after you approve it.
+          </footer>
+        </>
+      ) : busy ? (
+        <div className="adaptive-calculating">
+          <b>Comparing your qualified Fit Scores…</b>
+          <p>
+            The deterministic tool is testing real ranking tradeoffs before
+            Roamstead asks one useful question.
+          </p>
+        </div>
+      ) : (
+        <div className="adaptive-calculating adaptive-error">
+          <b>Adaptive question unavailable</b>
+          <p>{error}</p>
+        </div>
+      )}
     </section>
   );
 }
@@ -2402,12 +3048,14 @@ function WhyChanged({
 
 function MapPanel({
   landing,
+  city,
   candidates,
   selected,
   onSelect,
   mobileMap,
 }: {
   landing: boolean;
+  city: CityName;
   candidates: Candidate[];
   selected?: string;
   onSelect: (id: string) => void;
@@ -2416,11 +3064,11 @@ function MapPanel({
   return (
     <section
       className={`map-panel ${mobileMap ? "mobile-map" : ""}`}
-      aria-label="Map of Ho Chi Minh City recommendations"
+      aria-label={`Map of ${city} recommendations`}
     >
       <div className="map-search">
         <Search size={18} />
-        <span>Ho Chi Minh City, Vietnam</span>
+        <span>{city}, {MARKETS[city].country}</span>
         <button>
           <ListFilter size={17} />
         </button>
@@ -2521,7 +3169,7 @@ function MapPanel({
             <div>
               <b>One city, many ways to live</b>
               <p>
-                We’ll match verified HCMC properties against the life behind
+                We’ll match verified {MARKETS[city].short} properties against the life behind
                 your filters.
               </p>
             </div>
@@ -2556,60 +3204,8 @@ function MapPanel({
         <button>+</button>
         <button>−</button>
       </div>
-      <div className="map-attribution">Stylized demo map · HCMC</div>
+      <div className="map-attribution">Neighborhood overview · {MARKETS[city].short}</div>
     </section>
-  );
-}
-
-function ClarificationPrompt({
-  clarification,
-  busy,
-  onAnswer,
-}: {
-  clarification: ClarificationTurn;
-  busy: boolean;
-  onAnswer: (optionId: string) => void;
-}) {
-  return (
-    <div className="prompt-backdrop">
-      <section className="clarification-prompt">
-        <div className="prompt-spark">
-          <Sparkles size={24} />
-        </div>
-        <span className="eyebrow plain">
-          One adaptive question · {clarification.eligible_listing_count}{" "}
-          qualified listings checked
-        </span>
-        <h2>{clarification.question}</h2>
-        <div className="clarification-why">
-          <Info size={16} />
-          <p>
-            <b>Why I’m asking</b>
-            {clarification.why_asked}
-          </p>
-        </div>
-        <div className="clarification-options">
-          {clarification.options.map((option) => (
-            <button
-              key={option.id}
-              disabled={busy}
-              onClick={() => onAnswer(option.id)}
-              className={
-                option.preference_key ? "option-impact" : "option-balance"
-              }
-            >
-              <span>{option.label}</span>
-              <small>{option.impact_summary}</small>
-              <ArrowRight size={16} />
-            </button>
-          ))}
-        </div>
-        <p className="clarification-trust">
-          <ShieldCheck size={14} /> Your answer creates a proposal. It cannot
-          change your profile until you approve it.
-        </p>
-      </section>
-    </div>
   );
 }
 
@@ -2948,13 +3544,147 @@ function PropertyDetail({
   );
 }
 
+function DecisionWatchModal({
+  response,
+  listings,
+  busy,
+  error,
+  onApprove,
+  onCancel,
+  onClose,
+}: {
+  response: DecisionWatchResponse;
+  listings: Listing[];
+  busy: boolean;
+  error: string;
+  onApprove: () => void;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
+  const { watch, revisions } = response;
+  return (
+    <div className="modal-backdrop">
+      <section className="watch-modal">
+        <header className="brief-header">
+          <div>
+            <span className="eyebrow plain">ADK planning before action</span>
+            <h2>Decision Watch</h2>
+            <p>
+              Review the exact property-specific checks selected for your three
+              shortlisted homes. Nothing runs until you approve this plan.
+            </p>
+          </div>
+          <button className="modal-close static" onClick={onClose} aria-label="Close Decision Watch">
+            <X size={20} />
+          </button>
+        </header>
+        <section className="decision-watch standalone">
+          <header>
+            <div>
+              <span className="eyebrow plain">DueDiligencePlanner</span>
+              <h3>{watch.plan.model}</h3>
+              <p>{watch.plan.public_summary}</p>
+            </div>
+            <b className={`watch-status ${watch.status.toLowerCase()}`}>{watch.status}</b>
+          </header>
+          <div className="watch-tasks">
+            {watch.plan.tasks.map((task) => (
+              <article key={task.id}>
+                <span>{task.tool.replaceAll("_", " ")}</span>
+                <b>
+                  {listings.find((item) => item.id === task.listing_id)?.title ?? task.listing_id}
+                </b>
+                <p>{task.reason}</p>
+                <small>
+                  Baseline {task.baseline_status.toLowerCase()} · {task.baseline_value}
+                </small>
+              </article>
+            ))}
+          </div>
+          {watch.status === "PROPOSED" && (
+            <div className="watch-approval">
+              <LockKeyhole size={20} />
+              <div>
+                <b>Approval required</b>
+                <span>
+                  Run these checks now and schedule the next bounded check. The
+                  workflow cannot change your profile or Fit Scores.
+                </span>
+              </div>
+              <button className="primary compact" onClick={onApprove} disabled={busy}>
+                {busy ? "Running checks..." : "Approve and run"}
+              </button>
+            </div>
+          )}
+          {revisions.length > 0 && (
+            <div className="watch-revisions">
+              <div>
+                <h4>Persisted evidence changes</h4>
+                <span>{revisions.length} immutable revisions</span>
+              </div>
+              {revisions.map((revision) => (
+                <article key={revision.id}>
+                  <span className={`revision-outcome ${revision.outcome.toLowerCase()}`}>
+                    {revision.outcome}
+                  </span>
+                  <div>
+                    <b>{revision.tool.replaceAll("_", " ")}</b>
+                    <p><span>Before · {revision.before.status}</span>{revision.before.value}</p>
+                    <p><span>After · {revision.after.status}</span>{revision.after.value}</p>
+                    <small>{revision.explanation}</small>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          {watch.last_run_at && (
+            <div className="watch-notification">
+              <Activity size={17} />
+              <span>
+                <b>Evidence timeline updated and saved</b>
+                No profile or ranking state changed. Next bounded check: {watch.next_run_at ? new Date(watch.next_run_at).toLocaleDateString() : "not scheduled"}.
+              </span>
+            </div>
+          )}
+          {watch.status !== "PROPOSED" && watch.status !== "CANCELED" && (
+            <button className="watch-cancel" onClick={onCancel} disabled={busy}>
+              Cancel Decision Watch
+            </button>
+          )}
+          {watch.status === "CANCELED" && (
+            <p className="watch-canceled"><Check size={14} /> Canceled. No later execution can run.</p>
+          )}
+          {error && <p className="watch-error">{error}</p>}
+        </section>
+        <footer className="brief-footer">
+          <ShieldCheck size={16} />
+          <span>Only approved checks can append evidence. Missing data stays UNKNOWN.</span>
+          <button className="primary compact" onClick={onClose}>Done</button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function DecisionBriefModal({
   brief,
   events,
+  watch,
+  watchBusy,
+  watchError,
+  onProposeWatch,
+  onApproveWatch,
+  onCancelWatch,
   onClose,
 }: {
   brief: DecisionBrief;
   events: AgentEvent[];
+  watch: DecisionWatchResponse | null;
+  watchBusy: boolean;
+  watchError: string;
+  onProposeWatch: () => void;
+  onApproveWatch: () => void;
+  onCancelWatch: () => void;
   onClose: () => void;
 }) {
   const audit = brief.visual_audit;
@@ -2966,7 +3696,7 @@ function DecisionBriefModal({
         <header className="brief-header">
           <div>
             <span className="eyebrow plain">
-              Persistent agent run · Profile v{brief.profile_version}
+              Persistent decision run · Profile v{brief.profile_version}
             </span>
             <h2>{brief.title}</h2>
             <p>{brief.executive_summary}</p>
@@ -3025,10 +3755,37 @@ function DecisionBriefModal({
             ))}
           </div>
         )}
+        {brief.quality_proof && (
+          <section className="brief-quality-proof">
+            <div>
+              <span>
+                <Activity size={15} /> Executed workflow proof
+              </span>
+              <b>{brief.quality_proof.workflow_version}</b>
+            </div>
+            <p>
+              Prompt {brief.quality_proof.prompt_version} · trace{" "}
+              <code>{brief.quality_proof.trace_id.slice(0, 16)}</code>
+            </p>
+            {brief.quality_proof.evaluation_passed &&
+              brief.quality_proof.hard_gates_passed && (
+                <div className="quality-pass">
+                  <ShieldCheck size={15} />
+                  <span>
+                    <b>Release evaluation passed</b>
+                    {brief.quality_proof.case_count} cases · response{" "}
+                    {Math.round((brief.quality_proof.response_score ?? 0) * 100)}%
+                    {" · "}trajectory{" "}
+                    {Math.round((brief.quality_proof.trajectory_score ?? 0) * 100)}%
+                  </span>
+                </div>
+              )}
+          </section>
+        )}
         {events.length > 0 && (
           <details className="brief-events" open>
             <summary>
-              Completed agent trace · {events.length} persisted events
+              Completed decision trace · {events.length} persisted events
             </summary>
             {events.map((event) => (
               <div
@@ -3047,6 +3804,8 @@ function DecisionBriefModal({
                   </b>
                   <p>{event.summary}</p>
                   <small>
+                    {event.node_kind && `${event.node_kind} / `}
+                    {event.parallel_group && `${event.parallel_group} / `}
                     {event.model && `${event.model} · `}
                     {event.provider}
                     {event.duration_ms !== undefined &&
@@ -3296,6 +4055,152 @@ function DecisionBriefModal({
             ))}
           </aside>
         </div>
+        <section className="decision-watch">
+          <header>
+            <div>
+              <span className="eyebrow plain">Continued collaboration</span>
+              <h3>Decision Watch</h3>
+              <p>
+                Let Roamstead choose only the evidence checks these three
+                properties need. Nothing is scheduled until you approve the
+                exact plan.
+              </p>
+            </div>
+            {watch && (
+              <b className={`watch-status ${watch.watch.status.toLowerCase()}`}>
+                {watch.watch.status}
+              </b>
+            )}
+          </header>
+          {!watch ? (
+            <div className="watch-empty">
+              <ShieldCheck size={22} />
+              <div>
+                <b>Plan first, act only after approval</b>
+                <span>
+                  DueDiligencePlanner will select from source, price, photo,
+                  currency, and proximity tools based on the unresolved
+                  evidence in this brief.
+                </span>
+              </div>
+              <button
+                className="primary compact"
+                onClick={onProposeWatch}
+                disabled={watchBusy}
+              >
+                {watchBusy ? "Planning..." : "Create watch plan"}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="watch-plan-summary">
+                <Bot size={18} />
+                <div>
+                  <b>
+                    DueDiligencePlanner · {watch.watch.plan.model}
+                  </b>
+                  <p>{watch.watch.plan.public_summary}</p>
+                  <small>
+                    {watch.watch.plan.tasks.length} bounded checks · {watch.watch.plan.provider}
+                    {watch.watch.plan.degraded ? " · fallback plan" : " · live ADK plan"}
+                  </small>
+                </div>
+              </div>
+              <div className="watch-tasks">
+                {watch.watch.plan.tasks.map((task) => {
+                  const property = brief.properties.find(
+                    (item) => item.listing_id === task.listing_id,
+                  );
+                  return (
+                    <article key={task.id}>
+                      <span>{task.tool.replaceAll("_", " ")}</span>
+                      <b>{property?.title ?? task.listing_id}</b>
+                      <p>{task.reason}</p>
+                      <small>
+                        Baseline {task.baseline_status.toLowerCase()} · {task.baseline_value}
+                      </small>
+                    </article>
+                  );
+                })}
+              </div>
+              {watch.watch.status === "PROPOSED" && (
+                <div className="watch-approval">
+                  <LockKeyhole size={20} />
+                  <div>
+                    <b>Your approval is required</b>
+                    <span>
+                      Approving runs this bounded plan now and schedules the next
+                      check. It cannot alter your profile, hard filters, or Fit Scores.
+                    </span>
+                  </div>
+                  <button
+                    className="primary compact"
+                    onClick={onApproveWatch}
+                    disabled={watchBusy}
+                  >
+                    {watchBusy ? "Running approved checks..." : "Approve and run"}
+                  </button>
+                </div>
+              )}
+              {watch.revisions.length > 0 && (
+                <div className="watch-revisions">
+                  <div>
+                    <h4>Evidence revision timeline</h4>
+                    <span>
+                      {watch.revisions.length} immutable revision
+                      {watch.revisions.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  {watch.revisions.map((revision) => (
+                    <article key={revision.id}>
+                      <span className={`revision-outcome ${revision.outcome.toLowerCase()}`}>
+                        {revision.outcome}
+                      </span>
+                      <div>
+                        <b>{revision.tool.replaceAll("_", " ")}</b>
+                        <p>
+                          <span>Before · {revision.before.status}</span>
+                          {revision.before.value}
+                        </p>
+                        <p>
+                          <span>After · {revision.after.status}</span>
+                          {revision.after.value}
+                        </p>
+                        <small>{revision.explanation}</small>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+              {watch.watch.last_run_at && (
+                <div className="watch-notification">
+                  <Activity size={17} />
+                  <span>
+                    <b>Evidence timeline updated</b>
+                    Last run {new Date(watch.watch.last_run_at).toLocaleString()}
+                    {watch.watch.next_run_at &&
+                      ` · next bounded check ${new Date(watch.watch.next_run_at).toLocaleDateString()}`}
+                  </span>
+                </div>
+              )}
+              {watch.watch.status !== "CANCELED" && watch.watch.status !== "PROPOSED" && (
+                <button
+                  className="watch-cancel"
+                  onClick={onCancelWatch}
+                  disabled={watchBusy}
+                >
+                  Cancel Decision Watch
+                </button>
+              )}
+              {watch.watch.status === "CANCELED" && (
+                <p className="watch-canceled">
+                  <Check size={14} /> Canceled. No later scheduled execution can run.
+                </p>
+              )}
+            </>
+          )}
+          {watchError && <p className="watch-error">{watchError}</p>}
+        </section>
         <footer className="brief-footer">
           <ShieldCheck size={16} />
           <span>{brief.disclaimer}</span>

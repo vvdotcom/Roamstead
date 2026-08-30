@@ -50,10 +50,22 @@ class ListingCatalog:
             for band in ("LOW", "MEDIUM", "HIGH")
         )
 
-    async def listings(self, mode: str, limit: int = 100) -> list[Listing]:
-        stored = self.repository.list(mode, limit)
+    async def listings(
+        self,
+        mode: str,
+        limit: int = 100,
+        city: str = "Ho Chi Minh City",
+    ) -> list[Listing]:
+        stored = self.repository.list(mode, limit, city)
         if stored:
             return stored
+
+        # Expansion markets are intentionally curated once and served from the
+        # database. Browser traffic must never trigger repeated provider calls.
+        if city != "Ho Chi Minh City":
+            raise LiveListingSearchError(
+                f"The verified {city} catalog is not available in the database yet."
+            )
 
         state = self.repository.status(mode)
         if not state["due"]:
@@ -225,6 +237,13 @@ class ListingCatalog:
                 "publishable_with_required_photos": publishable,
                 "pending_gallery_enrichment": len(items) - publishable,
             }
+        markets = {
+            city: {
+                mode: self.repository.status(mode, city)["count"]
+                for mode in ("BUY", "RENT")
+            }
+            for city in ("Ho Chi Minh City", "Bangkok", "Kuala Lumpur")
+        }
         return {
             "storage": (
                 "Firestore primary + ephemeral SQLite cache"
@@ -239,6 +258,7 @@ class ListingCatalog:
             "firestore_mirrored": self._firestore_mirrored,
             "firestore_error": self._firestore_error,
             "modes": modes,
+            "markets": markets,
         }
 
     def get(self, listing_id: str) -> Listing | None:

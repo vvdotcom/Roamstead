@@ -29,19 +29,25 @@ class MemoryStore:
         self.revisions: dict[str, list[dict]] = {}
         self.profile_repository = ListingRepository() if persist_profiles else None
 
-    def create_session(self, housing_mode: str = "BUY") -> Session:
+    def create_session(self, housing_mode: str = "BUY", city: str = "Ho Chi Minh City") -> Session:
         session_id = f"session-{uuid4().hex[:8]}"
         profile_id = f"profile-{uuid4().hex[:8]}"
         is_rent = housing_mode == "RENT"
+        market_budgets = {
+            "Ho Chi Minh City": {"BUY": 175_000, "RENT": 1_500},
+            "Bangkok": {"BUY": 750_000, "RENT": 2_000},
+            "Kuala Lumpur": {"BUY": 700_000, "RENT": 8_000},
+        }
+        budget = market_budgets.get(city, market_budgets["Ho Chi Minh City"])[housing_mode]
         profile = DecisionProfile(
             profile_id=profile_id,
             hard_constraints=[
-                HardConstraint(key="city", label="Ho Chi Minh City", operator="=", value="Ho Chi Minh City"),
+                HardConstraint(key="city", label=city, operator="=", value=city),
                 HardConstraint(
                     key="rent_budget" if is_rent else "budget",
-                    label="$1,500 monthly rent" if is_rent else "$175k purchase budget",
+                    label=f"${budget:,} monthly rent" if is_rent else f"${budget:,} purchase budget",
                     operator="<=",
-                    value=1500 if is_rent else 175000,
+                    value=budget,
                 ),
                 HardConstraint(key="healthcare", label="Hospital within 30 min", operator="<=", value=30),
                 HardConstraint(key="min_beds", label="At least 1 bedroom", operator=">=", value=1),

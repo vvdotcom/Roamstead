@@ -1,4 +1,5 @@
 from pathlib import Path
+import io
 
 import pytest
 from PIL import Image
@@ -80,3 +81,16 @@ async def test_gemma_critic_rejects_missing_local_images(monkeypatch):
 def test_visual_audit_rejects_malformed_json(tmp_path):
     with pytest.raises(ValueError, match="no JSON object"):
         gemma_critic._normalize("not-json", "GEMINI_API", [_image(tmp_path)])
+
+
+def test_cloud_image_bytes_are_prepared_without_a_local_path():
+    buffer = io.BytesIO()
+    Image.new("RGB", (48, 32), color=(18, 87, 54)).save(buffer, format="PNG")
+    image = gemma_critic.VisualImageInput(
+        listing_id="real-cloud-1",
+        image_index=0,
+        image_url="/api/v1/listing-images/real-cloud-1",
+        data=buffer.getvalue(),
+    )
+    prepared = gemma_critic._prepared_jpeg(image)
+    assert prepared.startswith(b"\xff\xd8\xff")

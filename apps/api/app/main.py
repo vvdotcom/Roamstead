@@ -14,10 +14,12 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from .agent import agent_enabled
 from .gemma_critic import gemma_critic_enabled, gemma_model, gemma_provider
 from .memory_critic import memory_critic_enabled, memory_critic_model
-from .cloud import download_listing_image, persist_profile, persist_revision, publish_event
+from .cloud import download_city_orientation, download_listing_image, persist_profile, persist_revision, publish_event
+from .city_orientations import NARRATION_MODEL, VIDEO_MODEL, all_city_orientations, city_orientation
 from .clarifications import answer_clarification, plan_clarification
 from .data import CANDIDATES
 from .decision_briefs import decision_brief_service
+from .decision_watches import decision_watch_service
 from .listing_fit import score_listing_results
 from .listings.live_search import (
     LiveListingConfigurationError,
@@ -44,6 +46,10 @@ from .models import (
     CreateSessionRequest,
     CreateDecisionBriefRequest,
     CreateDecisionBriefResponse,
+    CreateDecisionWatchRequest,
+    ApproveDecisionWatchRequest,
+    DecisionWatchResponse,
+    EvaluationReport,
     FeedbackRequest,
     HardConstraint,
     ListingSearchRequest,
@@ -63,6 +69,7 @@ from .semantic_memory import (
     EMBEDDING_MODEL,
     make_memory,
     persist_memory,
+    persist_memory_pending,
     public_memory,
     retrieve_memory,
     semantic_memory_enabled,
@@ -123,6 +130,7 @@ def with_local_listing_images(item):
 
 @app.get("/health")
 def health():
+    orientations = all_city_orientations()
     return {
         "status": "ok",
         "service": "roamstead-api",
@@ -150,13 +158,56 @@ def health():
             },
         },
         "persistence": listing_catalog.status()["storage"],
+        "observability": {
+            "bigquery_agent_analytics": os.getenv("ENABLE_BIGQUERY_AGENT_ANALYTICS", "0") == "1",
+            "cloud_trace": os.getenv("ENABLE_CLOUD_TRACE", "0") == "1",
+            "content_policy": "metadata_only_no_prompts_profiles_vectors_or_reasoning",
+        },
+        "city_orientation": {
+            "video_model": VIDEO_MODEL,
+            "narration_model": NARRATION_MODEL,
+            "ready_cities": sum(
+                item["video_status"] == "READY" and item["narration_status"] == "READY"
+                for item in orientations
+            ),
+            "generation_mode": "GENERATE_ONCE_PERSIST_AND_SERVE",
+        },
         "integration_proof": "Successful persisted visual and memory audits plus a READY memory context are required; configuration alone is not proof.",
     }
 
 
+@app.get("/api/v1/city-orientations")
+def city_orientations():
+    return {"items": all_city_orientations()}
+
+
+@app.get("/api/v1/city-orientations/{city_slug}")
+def get_city_orientation(city_slug: str):
+    item = city_orientation(city_slug)
+    if not item:
+        raise HTTPException(status_code=404, detail="City orientation not found")
+    return item
+
+
+@app.get("/api/v1/city-orientations/{city_slug}/{asset_kind}")
+async def city_orientation_asset(city_slug: str, asset_kind: str):
+    if asset_kind not in {"video", "audio"} or not city_orientation(city_slug):
+        raise HTTPException(status_code=404, detail="City orientation asset not found")
+    asset = await asyncio.to_thread(download_city_orientation, city_slug, asset_kind)
+    if not asset:
+        raise HTTPException(status_code=404, detail="City orientation asset is unavailable")
+    content, media_type = asset
+    return Response(
+        content,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
 @app.post("/api/v1/sessions")
 def create_session(body: CreateSessionRequest | None = None):
-    session = store.create_session((body or CreateSessionRequest()).housing_mode)
+    request = body or CreateSessionRequest()
+    session = store.create_session(request.housing_mode, request.city)
     return {
         "session": session,
         "profile": store.profiles[session.profile_id],
@@ -176,7 +227,7 @@ def message(session_id: str, body: SessionMessage):
     store.save_session(session)
     store.rankings[profile.profile_id] = rank_candidates(CANDIDATES, weights_from_profile(profile))
     return AssistantReply(
-        message="Your Decision Profile is ready to review before matching real HCMC properties.",
+        message="Your Decision Profile is ready to review before matching real properties.",
         stage=session.stage,
         profile=profile,
         recommendations=store.rankings[profile.profile_id],
@@ -260,6 +311,7 @@ async def update_profile(profile_id: str, body: ProfileUpdateRequest):
             constraints[key] = item
 
     budget_key = "rent_budget" if is_rent else "budget"
+    set_constraint("city", body.city, "=", body.city)
     set_constraint(
         budget_key,
         f"${body.budget_usd:,} monthly rent" if is_rent else f"${body.budget_usd:,} purchase budget",
@@ -302,11 +354,12 @@ async def update_profile(profile_id: str, body: ProfileUpdateRequest):
     }
     store.save_revision(profile_id, revision)
     store.save_profile(profile)
-    persist_revision(profile_id, revision)
-    persist_profile(profile.model_dump())
     deltas = ranking_deltas(before_ranking, after_ranking)
     publish_event("ranking.recomputed", {"profile_id": profile_id, "deltas": [item.model_dump() for item in deltas]})
-    await persist_memory(
+    # The profile and revision are already durable. Embedding enrichment is
+    # advisory and must never hold the Save Profile response open; pending
+    # memories are retried idempotently during semantic retrieval.
+    persist_memory_pending(
         listing_catalog.repository,
         make_memory(
             profile_id=profile_id,
@@ -318,6 +371,7 @@ async def update_profile(profile_id: str, body: ProfileUpdateRequest):
                 + ", ".join(f"{key} {value:.2f}" for key, value in sorted(body.priorities.items()))
             ),
             transaction_mode="RENT" if is_rent else "BUY",
+            city=body.city,
         ),
     )
     return {"profile": profile, "recommendations": after_ranking, "deltas": deltas}
@@ -523,8 +577,8 @@ def undo(profile_id: str):
 @app.get("/api/v1/listings/status")
 def listing_search_status():
     return {
-        "provider": "Gemini + Google Search",
-        "source_domain": "batdongsan.com.vn",
+        "provider": "Persistent verified listing catalog",
+        "source_domains": ["batdongsan.com.vn", "propertyhub.in.th", "propertygenie.com.my"],
         "configured": live_listing_search.configured,
         "synthetic_fallback": False,
         "catalog": listing_catalog.status(),
@@ -534,15 +588,21 @@ def listing_search_status():
 @app.post("/api/v1/listings/search", response_model=ListingSearchResult)
 async def search_listings(body: ListingSearchRequest):
     profile = require_profile(body.profile_id)
+    profile_city = next(
+        (str(item.value) for item in profile.hard_constraints if item.key == "city"),
+        "Ho Chi Minh City",
+    )
+    if body.city != profile_city:
+        raise HTTPException(status_code=409, detail="The selected city must match the saved profile")
     try:
         # Browser refreshes read the durable catalog. Only the weekly coordinator
         # is allowed to spend a new Gemini grounded-search request.
-        items = await listing_catalog.listings(body.transaction_mode, body.limit)
+        items = await listing_catalog.listings(body.transaction_mode, body.limit, body.city)
     except LiveListingConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except LiveListingSearchError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    catalog_state = listing_catalog.repository.status(body.transaction_mode)
+    catalog_state = listing_catalog.repository.status(body.transaction_mode, body.city)
     pending_gallery_verification = sum(not has_publishable_gallery(item.id) for item in items)
     items = [item for item in items if has_publishable_gallery(item.id)]
     items = score_listing_results(
@@ -557,6 +617,7 @@ async def search_listings(body: ListingSearchRequest):
         requested=body.limit,
         returned=len(items),
         transaction_mode=body.transaction_mode,
+        city=body.city,
         partial=len(items) < body.limit,
         minimum_photos_per_listing=minimum_gallery_size(),
         pending_gallery_verification=pending_gallery_verification,
@@ -568,6 +629,8 @@ async def search_listings(body: ListingSearchRequest):
         last_refreshed_at=catalog_state["last_success_at"],
         next_refresh_at=catalog_state["next_refresh_at"],
         storage=listing_catalog.status()["storage"],
+        provider="Persistent verified listing catalog",
+        source_domain=", ".join(sorted({item.source_domain for item in items})),
     )
 
 
@@ -679,6 +742,91 @@ def get_decision_brief(run_id: str):
 def list_decision_briefs(profile_id: str):
     require_profile(profile_id)
     return {"items": decision_brief_service.repository.list_decision_briefs(profile_id)}
+
+
+@app.get("/api/v1/evaluations/latest", response_model=EvaluationReport)
+def latest_evaluation_report():
+    report = decision_brief_service.repository.latest_evaluation_report()
+    if not report:
+        raise HTTPException(status_code=404, detail="No persisted evaluation report is available")
+    return report
+
+
+@app.post(
+    "/api/v1/decision-watches",
+    response_model=DecisionWatchResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_decision_watch(body: CreateDecisionWatchRequest):
+    profile = require_profile(body.profile_id)
+    try:
+        result = await decision_watch_service.create(body, profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    publish_event(
+        "decision_watch.proposed",
+        {"profile_id": body.profile_id, "watch_id": result.watch.id, "approval_required": True},
+    )
+    return result
+
+
+@app.get("/api/v1/decision-watches/{watch_id}", response_model=DecisionWatchResponse)
+def get_decision_watch(watch_id: str):
+    watch = decision_watch_service.repository.get_decision_watch(watch_id)
+    if not watch:
+        raise HTTPException(status_code=404, detail="Decision Watch not found")
+    return decision_watch_service.response(watch)
+
+
+@app.get("/api/v1/profiles/{profile_id}/decision-watches")
+def list_decision_watches(profile_id: str):
+    require_profile(profile_id)
+    return {
+        "items": [
+            decision_watch_service.response(watch)
+            for watch in decision_watch_service.repository.list_decision_watches(profile_id)
+        ]
+    }
+
+
+@app.post(
+    "/api/v1/decision-watches/{watch_id}/approve",
+    response_model=DecisionWatchResponse,
+)
+async def approve_decision_watch(
+    watch_id: str, body: ApproveDecisionWatchRequest | None = None
+):
+    try:
+        result = await decision_watch_service.approve(
+            watch_id, run_now=(body or ApproveDecisionWatchRequest()).run_now
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    publish_event(
+        "decision_watch.approved",
+        {"profile_id": result.watch.profile_id, "watch_id": result.watch.id},
+    )
+    return result
+
+
+@app.post(
+    "/api/v1/decision-watches/{watch_id}/cancel",
+    response_model=DecisionWatchResponse,
+)
+def cancel_decision_watch(watch_id: str):
+    try:
+        result = decision_watch_service.cancel(watch_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    publish_event(
+        "decision_watch.canceled",
+        {"profile_id": result.watch.profile_id, "watch_id": result.watch.id},
+    )
+    return result
 
 
 @app.get("/api/v1/decision-briefs/{run_id}/events")

@@ -251,7 +251,7 @@ async def plan_clarification(profile: DecisionProfile) -> ClarificationPlanRespo
                 "AGENT_STATUS",
                 "PreferenceInterpreter",
                 "One adaptive question selected",
-                "Gemini phrased the highest-impact tradeoff calculated from the live profile and saved catalog.",
+                "Selected the highest-impact tradeoff calculated from the live profile and saved catalog.",
                 {"model": run.model},
             )
         except Exception as exc:
@@ -260,8 +260,8 @@ async def plan_clarification(profile: DecisionProfile) -> ClarificationPlanRespo
                 3,
                 "RECOVERABLE_ERROR",
                 "PreferenceInterpreter",
-                "Gemini phrasing unavailable",
-                "The counterfactual tool supplied the same question without changing profile state.",
+                "Adaptive wording unavailable",
+                "The ranking analysis supplied the same question without changing profile state.",
                 {"error_type": type(exc).__name__},
             )
 

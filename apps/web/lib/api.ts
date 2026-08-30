@@ -77,8 +77,15 @@ export type Listing = {
   neighborhood_id: string;
   title: string;
   transaction_mode: "BUY" | "RENT";
-  price_vnd: number;
+  city: string;
+  country: string;
+  country_code: string;
+  local_currency: string;
+  price_local?: number;
+  price_vnd?: number;
   price_usd: number;
+  exchange_rate_per_usd?: number;
+  exchange_rate_date?: string;
   price_band: "LOW" | "MEDIUM" | "HIGH" | "ULTRA_HIGH";
   district: string;
   address?: string;
@@ -107,6 +114,7 @@ export type ListingSearchResult = {
   requested: number;
   returned: number;
   transaction_mode: "BUY" | "RENT";
+  city: string;
   live: true;
   partial: boolean;
   minimum_photos_per_listing: number;
@@ -179,6 +187,9 @@ export type AgentEvent = {
   model?: string;
   provider?: string;
   duration_ms?: number;
+  node_kind?: "FUNCTION" | "TOOL" | "AGENT" | "MODEL_CRITIC" | "JOIN" | "ROUTER";
+  parallel_group?: string;
+  parent_sequence?: number;
   public_payload: Record<string, unknown>;
   created_at: string;
 };
@@ -313,6 +324,17 @@ export type DecisionBrief = {
   visual_audit?: VisualEvidenceAudit;
   memory_context?: MemoryContextPacket;
   memory_audit?: MemoryConsistencyAudit;
+  quality_proof?: {
+    workflow_version: string;
+    prompt_version: string;
+    trace_id: string;
+    evaluation_report_id?: string;
+    evaluation_passed: boolean;
+    case_count: number;
+    hard_gates_passed: boolean;
+    response_score?: number;
+    trajectory_score?: number;
+  };
   models_used: string[];
   degraded: boolean;
   generated_at: string;
@@ -327,12 +349,119 @@ export type AgentRun = {
   orchestration: string;
   execution_mode: "ADK_GEMINI" | "VERIFIED_CACHE";
   current_stage: string;
+  workflow_version: string;
+  prompt_version: string;
+  trace_id: string;
   completed_stages: string[];
   models_used: string[];
   degraded: boolean;
 };
 
+export type EvaluationReport = {
+  id: string;
+  workflow_version: string;
+  prompt_version: string;
+  dataset_version: string;
+  development_case_count: number;
+  validation_case_count: number;
+  hard_gates_passed: boolean;
+  passed: boolean;
+  metrics: { name: string; score: number; threshold: number; passed: boolean; explanation: string }[];
+  source: "FIXTURE" | "ADK_EVAL" | "CLOUD_RUN_JOB";
+  created_at: string;
+};
+
+export type DueDiligenceTool =
+  | "SOURCE_AVAILABILITY"
+  | "PRICE_COMPARISON"
+  | "PHOTO_EVIDENCE"
+  | "CURRENCY_NORMALIZATION"
+  | "PROXIMITY_VERIFICATION";
+
+export type DueDiligenceTask = {
+  id: string;
+  listing_id: string;
+  tool: DueDiligenceTool;
+  reason: string;
+  priority: number;
+  baseline_value: string;
+  baseline_status: "CONFIRMED" | "INFERRED" | "UNKNOWN";
+  source_url: string;
+  baseline_observed_at: string;
+};
+
+export type EvidenceRevision = {
+  id: string;
+  watch_id: string;
+  listing_id: string;
+  task_id: string;
+  tool: DueDiligenceTool;
+  outcome: "CHANGED" | "UNCHANGED" | "UNKNOWN";
+  before: {
+    value: string;
+    status: "CONFIRMED" | "INFERRED" | "UNKNOWN";
+    source_url: string;
+    observed_at: string;
+  };
+  after: {
+    value: string;
+    status: "CONFIRMED" | "INFERRED" | "UNKNOWN";
+    source_url: string;
+    observed_at: string;
+  };
+  explanation: string;
+  created_at: string;
+};
+
+export type DecisionWatchEvent = {
+  id: string;
+  watch_id: string;
+  sequence: number;
+  event_type: string;
+  title: string;
+  summary: string;
+  public_payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type DecisionWatch = {
+  id: string;
+  profile_id: string;
+  listing_ids: string[];
+  status: "PROPOSED" | "ACTIVE" | "RUNNING" | "CANCELED" | "DEGRADED";
+  approval_required: true;
+  approved_at?: string;
+  next_run_at?: string;
+  last_run_at?: string;
+  canceled_at?: string;
+  revision_count: number;
+  run_count: number;
+  last_outcome?: "COMPLETED" | "DEGRADED";
+  created_at: string;
+  updated_at: string;
+  plan: {
+    id: string;
+    profile_id: string;
+    profile_version: number;
+    listing_ids: string[];
+    tasks: DueDiligenceTask[];
+    public_summary: string;
+    model: string;
+    provider: "GOOGLE_ADK" | "DETERMINISTIC_FALLBACK";
+    degraded: boolean;
+    created_at: string;
+  };
+};
+
+export type DecisionWatchResponse = {
+  watch: DecisionWatch;
+  revisions: EvidenceRevision[];
+  events: DecisionWatchEvent[];
+  reused: boolean;
+};
+
 export type ProfileUpdate = {
+  city: "Ho Chi Minh City" | "Bangkok" | "Kuala Lumpur";
   budget_usd: number;
   min_beds: number;
   min_baths: number;
@@ -340,6 +469,23 @@ export type ProfileUpdate = {
   max_food_minutes: number;
   property_types: ("Apartment" | "House")[];
   priorities: Record<string, number>;
+};
+
+export type CityOrientation = {
+  slug: "ho-chi-minh-city" | "bangkok" | "kuala-lumpur";
+  city: ProfileUpdate["city"];
+  country: string;
+  headline: string;
+  transcript: string;
+  video_model: string;
+  narration_model: string;
+  video_status: "READY" | "UNAVAILABLE" | "FAILED";
+  narration_status: "READY" | "UNAVAILABLE" | "FAILED";
+  video_url?: string;
+  audio_url?: string;
+  generated_at?: string;
+  video_duration_seconds?: number;
+  disclaimer: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -359,13 +505,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  createSession: (housingMode: "BUY" | "RENT") =>
+  warmup: () => request<Record<string, unknown>>("/api/v1/listings/status"),
+  cityOrientations: () =>
+    request<{ items: CityOrientation[] }>("/api/v1/city-orientations"),
+  createSession: (
+    housingMode: "BUY" | "RENT",
+    city: "Ho Chi Minh City" | "Bangkok" | "Kuala Lumpur" = "Ho Chi Minh City",
+  ) =>
     request<{
       session: { id: string; profile_id: string; housing_mode: "BUY" | "RENT" };
       profile: Profile;
     }>("/api/v1/sessions", {
       method: "POST",
-      body: JSON.stringify({ housing_mode: housingMode }),
+      body: JSON.stringify({ housing_mode: housingMode, city }),
     }),
   profile: (profileId: string) =>
     request<Profile>(`/api/v1/profiles/${profileId}`),
@@ -439,12 +591,14 @@ export const api = {
     profileId: string,
     focusedNeighborhoodId?: string,
     refresh = false,
+    city: "Ho Chi Minh City" | "Bangkok" | "Kuala Lumpur" = "Ho Chi Minh City",
   ) =>
     request<ListingSearchResult>("/api/v1/listings/search", {
       method: "POST",
       body: JSON.stringify({
         transaction_mode: transactionMode,
         profile_id: profileId,
+        city,
         focused_neighborhood_id: focusedNeighborhoodId,
         limit: 100,
         refresh,
@@ -474,6 +628,28 @@ export const api = {
   briefs: (profileId: string) =>
     request<{ items: DecisionBrief[] }>(
       `/api/v1/profiles/${profileId}/decision-briefs`,
+    ),
+  latestEvaluation: () => request<EvaluationReport>("/api/v1/evaluations/latest"),
+  createWatch: (profileId: string, listingIds: string[]) =>
+    request<DecisionWatchResponse>("/api/v1/decision-watches", {
+      method: "POST",
+      body: JSON.stringify({ profile_id: profileId, listing_ids: listingIds }),
+    }),
+  watches: (profileId: string) =>
+    request<{ items: DecisionWatchResponse[] }>(
+      `/api/v1/profiles/${profileId}/decision-watches`,
+    ),
+  watch: (watchId: string) =>
+    request<DecisionWatchResponse>(`/api/v1/decision-watches/${watchId}`),
+  approveWatch: (watchId: string, runNow = true) =>
+    request<DecisionWatchResponse>(
+      `/api/v1/decision-watches/${watchId}/approve`,
+      { method: "POST", body: JSON.stringify({ run_now: runNow }) },
+    ),
+  cancelWatch: (watchId: string) =>
+    request<DecisionWatchResponse>(
+      `/api/v1/decision-watches/${watchId}/cancel`,
+      { method: "POST" },
     ),
   streamBriefEvents: async (
     runId: string,
