@@ -6,7 +6,9 @@ Copyright © 2026 Roamstead project owner. All rights reserved. This repository 
 
 ## What this app is about
 
-Roamstead is a collaborative AI decision partner for cross-border housing in Southeast Asia. It turns messy property pages, photographs, relocation constraints, and user feedback into a persistent, approval-gated decision process—not another chat window. The live catalog covers Ho Chi Minh City, Bangkok, and Kuala Lumpur, with Ho Chi Minh City as the primary demonstration.
+Roamstead is a collaborative decision partner for people trying to find an affordable home where they can retire abroad. I started it from a problem I feel personally: rising home prices and living costs have made it impossible for me to afford a home where I currently live. I wanted a practical way for my family and me to investigate whether another market could offer a realistic path to retirement without trusting incomplete listings or making a life-changing decision on price alone. I believe many other Americans facing the same pressure could find this kind of careful, evidence-backed guidance useful too.
+
+Roamstead turns property pages, photographs, budgets, relocation constraints, and user feedback into a persistent, approval-gated decision process—not another chat window. It treats affordability as personal: the right home must fit the user's budget while also supporting healthcare access, daily needs, space, preferred surroundings, and other priorities. The live catalog covers Ho Chi Minh City, Bangkok, and Kuala Lumpur, with Ho Chi Minh City as the primary demonstration.
 
 **All Things Agentic Hackathon category:** Collaborative Partner
 
@@ -54,13 +56,13 @@ curl -fsS https://roamstead-api-113080100961.us-central1.run.app/health
 
 The response should report `status: ok`, `deployment_mode: CLOUD_RUN`, `orchestration: Google ADK`, `execution_mode: ADK_GEMINI`, Firestore as primary persistence, and enabled BigQuery/Cloud Trace observability.
 
-![Roamstead live landing page](readme-assets/01-home.webp)
+![Roamstead live landing page](readme-assets/01-home.png)
 
 ## Why it is a Collaborative Partner
 
-The agent leads the process by measuring uncertainty, asking the next useful question, proposing a typed change, remembering prior feedback, and planning follow-up work. The user remains the authority over every state-changing decision.
+The agent helps turn an affordable-retirement goal into a decision the user can defend. It leads the process by measuring uncertainty, asking the next useful question, proposing a typed change, remembering prior feedback, and planning follow-up work. The user remains the authority over every state-changing decision.
 
-![Roamstead collaborative user-agent loop](readme-assets/collaboration-loop.svg)
+![Roamstead collaborative user-agent loop](readme-assets/collaboration-loop.png)
 
 The collaboration contract is explicit:
 
@@ -74,21 +76,21 @@ The collaboration contract is explicit:
 
 | Decision profile and adaptive clarification | Ranked real listings and map |
 |---|---|
-| ![Editable decision profile and adaptive question](readme-assets/02-decision-profile.webp) | ![Personalized property results and Google Map](readme-assets/03-ranked-listings-map.webp) |
+| ![Editable decision profile and adaptive question](readme-assets/02-decision-profile.png) | ![Personalized property results and Google Map](readme-assets/03-ranked-listings-map.png) |
 
 | Property-level evidence | Live multi-agent progress |
 |---|---|
-| ![Property detail with Fit Score and provenance](readme-assets/04-property-evidence.webp) | ![Live Decision Brief agent execution](readme-assets/05-live-agent-run.webp) |
+| ![Property detail with Fit Score and provenance](readme-assets/04-property-evidence.png) | ![Live Decision Brief agent execution](readme-assets/05-live-agent-run.png) |
 
 | Persisted model trace | Reloadable final brief |
 |---|---|
-| ![Persisted model event trace](readme-assets/06-persisted-model-trace.webp) | The final brief preserves confirmed, inferred, and unknown claims; retrieved memory; both Gemma audits; verification questions; next actions; and the complete public trace. |
+| ![Persisted model event trace](readme-assets/06-persisted-model-trace.png) | The final brief preserves confirmed, inferred, and unknown claims; retrieved memory; both Gemma audits; verification questions; next actions; and the complete public trace. |
 
 ## Multi-model agent workflow
 
 Google ADK defines the durable `PartnerCoordinator` workflow. Function nodes lock the profile version and three listing IDs before model execution. Public SSE events contain action summaries, typed outputs, timings, statuses, and recoverable errors—not hidden reasoning.
 
-![Google ADK PartnerCoordinator workflow](readme-assets/agent-workflow.svg)
+![Google ADK PartnerCoordinator workflow](readme-assets/agent-workflow.png)
 
 | Stage | Model or tool | Responsibility | Failure behavior |
 |---|---|---|---|
@@ -115,7 +117,7 @@ City media is generated once, hashed, stored in Cloud Storage, recorded in Fires
 
 The deployed system uses direct Cloud Run URLs; it does not claim undeployed DNS, load-balancing, or Cloud Armor resources.
 
-![Roamstead deployed Google Cloud architecture](infra/roamstead-google-cloud-architecture.svg)
+![Roamstead deployed Google Cloud architecture](infra/roamstead-google-cloud-architecture.png)
 
 ### Runtime components
 
@@ -137,15 +139,15 @@ The weekly Cloud Scheduler trigger remains paused until a bounded refresh confir
 
 Every push to `main` triggers [cloudbuild.yaml](cloudbuild.yaml). API and web checks run in parallel; passing builds create commit-tagged API and web containers, push them to Artifact Registry, deploy the existing Cloud Run services, and verify both public endpoints.
 
-![Roamstead CI/CD and runtime proof pipeline](readme-assets/cicd-proof.svg)
+![Roamstead CI/CD and runtime proof pipeline](readme-assets/cicd-proof.png)
 
 | Cloud Build | Cloud Run observability |
 |---|---|
-| ![Successful GitHub-triggered Cloud Build](readme-assets/07-cloud-build.webp) | ![Cloud Run production metrics](readme-assets/08-cloud-run-observability.webp) |
+| ![Successful GitHub-triggered Cloud Build](readme-assets/07-cloud-build.png) | ![Cloud Run production metrics](readme-assets/08-cloud-run-observability.png) |
 
 | Firestore state | Persisted model event proof |
 |---|---|
-| ![Firestore collections and persisted state](readme-assets/09-firestore-state.webp) | ![Firestore model execution events](readme-assets/10-model-event-proof.webp) |
+| ![Firestore collections and persisted state](readme-assets/09-firestore-state.png) | ![Firestore model execution events](readme-assets/10-model-event-proof.png) |
 
 For an operator with Google Cloud access, the strict production proof script requires deployment health, expected models, three consecutive non-degraded briefs, the persisted evaluation report, Firestore vector index, Pub/Sub, Storage, and both Cloud Run jobs:
 
@@ -297,6 +299,7 @@ No secrets, private credentials, local `.env` values, final demo video, narratio
 ## Findings and learnings
 
 - A collaborative agent is more trustworthy when it proposes measured state changes and waits for approval than when it silently “personalizes” a profile.
+- Affordable retirement housing cannot be reduced to the lowest listing price; budget, healthcare, daily needs, space, location, and unresolved legal or practical risks must be evaluated together.
 - Parallel critics are useful only when their starts, outputs, join, failures, model IDs, and timings are durable and inspectable.
 - Property evidence needs explicit `CONFIRMED`, `INFERRED`, and `UNKNOWN` states; fluent prose is not provenance.
 - Semantic memory should retrieve compact advisory context, not become an invisible scoring feature.
