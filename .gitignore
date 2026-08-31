@@ -67,3 +67,7 @@ crash.log
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Repository documentation policy: keep only the root README.
+*.md
+!README.md

@@ -1,83 +1,226 @@
 # Roamstead
 
-Roamstead is a collaborative decision partner for cross-border housing in Southeast Asia. The live catalog covers **Ho Chi Minh City, Bangkok, and Kuala Lumpur**, taking users directly from their relocation preferences to verified properties while keeping Ho Chi Minh City as the submission's primary story.
+## License
 
-**Collaborative Partner fit:** Roamstead turns messy Vietnamese property pages and real photographs into persistent, approval-gated decision state. It does not stop at retrieval: two semantically related rejections can create a proposed profile revision, approval visibly reranks qualified properties, and an approved Decision Watch appends new before/after evidence to the database.
+Copyright © 2026 Roamstead project owner. All rights reserved. This repository is source-available for review and hackathon evaluation; reuse, modification, distribution, or commercial use requires prior written permission. See [LICENSE](LICENSE). Third-party software, services, data, trademarks, and media retain their own licenses and terms.
 
-**Live deployment:** [Roamstead web](https://roamstead-web-113080100961.us-central1.run.app) · [API health](https://roamstead-api-113080100961.us-central1.run.app/health)
+## What this app is about
 
-## Live markets
+Roamstead is a collaborative AI decision partner for cross-border housing in Southeast Asia. It turns messy property pages, photographs, relocation constraints, and user feedback into a persistent, approval-gated decision process—not another chat window. The live catalog covers Ho Chi Minh City, Bangkok, and Kuala Lumpur, with Ho Chi Minh City as the primary demonstration.
 
-| Market | Buy | Rent | Catalog source | Serving model |
+**All Things Agentic Hackathon category:** Collaborative Partner
+
+**Live app:** [roamstead-web-113080100961.us-central1.run.app](https://roamstead-web-113080100961.us-central1.run.app)
+
+**Live API health:** [roamstead-api-113080100961.us-central1.run.app/health](https://roamstead-api-113080100961.us-central1.run.app/health)
+
+**Repository:** [github.com/vvdotcom/Roamstead](https://github.com/vvdotcom/Roamstead)
+
+**Demo video:** [Watch the 3:52 product demo on YouTube](https://youtu.be/A_titwNpt28)
+
+**Build story:** [How Google Cloud helped me create a collaborative housing agent for Southeast Asia](https://dev.to/vy_pham_d62c82123dea6f7b8/uilding-roamstead-how-google-cloud-helped-me-create-a-collaborative-housing-agent-for-southeast-2o00)
+
+**Social post:** [Roamstead on X](https://x.com/vvdotcome/status/2094292517017858140)
+
+## Judge testing — start here
+
+No account, API key, payment, or private credentials are required for the hosted judge path.
+
+1. Open the [live app](https://roamstead-web-113080100961.us-central1.run.app) and choose **Demo login** or **Explore with demo access**.
+2. Choose **Ho Chi Minh City** and **Buy**, then describe the move and open the editable **Decision profile**.
+3. Confirm the hard constraints and priorities. Roamstead measures which preference change would most affect the qualified top ten and asks one high-information clarification.
+4. Answer the clarification. Inspect the typed proposal and choose **Accept**, **Soften**, or **Reject**. The profile cannot change before this approval.
+5. Browse the real cached property catalog. Open a property to inspect its Fit Score breakdown, provenance, photo evidence, and unknowns. Reject two properties for the same underlying reason using different wording, then accept the new proposal and observe the versioned profile and ranking change.
+6. Select exactly three qualified properties and choose **Build Decision Brief**. Keep the progress panel open while the persisted SSE trace shows semantic retrieval, Gemini analysis, two parallel Gemma critics, verification, and composition.
+7. Confirm the completed run shows the same run ID, `COMPLETED`, `degraded=false`, and model-specific persisted events. Both Gemma `SPECIALIST_STARTED` events must appear before either completion event.
+8. Open **Decision Watch**, inspect the bounded due-diligence plan, and approve it. The result appends an immutable before/after evidence revision without changing the profile or Fit Scores.
+
+Expected live proof:
+
+| Proof | What the judge should see |
+|---|---|
+| Collaboration | A data-selected clarification, explicit proposal, approval-only profile revision, immediate reranking, and persistent feedback |
+| Actual model execution | `SemanticMemoryTool · gemini-embedding-001`, `ListingAnalyst · gemini-3.5-flash`, `VisualEvidenceCritic · gemma-4-26b-a4b-it`, and `MemoryConsistencyCritic · gemma-4-31b-it`, each with status and latency |
+| Parallel orchestration | Both Gemma specialists start before `CriticJoin`; the join waits for both branches before verification |
+| Durable state | Reloading restores the same profile version, brief, event sequence, model IDs, and completed run |
+| Consequential action | An approved Decision Watch runs bounded deterministic checks and writes an immutable evidence revision |
+| Google Cloud | The public `.run.app` URL, `/health`, Firestore state, Cloud Build release, and Cloud Run observability shown below |
+
+Quick independent health check:
+
+```bash
+curl -fsS https://roamstead-api-113080100961.us-central1.run.app/health
+```
+
+The response should report `status: ok`, `deployment_mode: CLOUD_RUN`, `orchestration: Google ADK`, `execution_mode: ADK_GEMINI`, Firestore as primary persistence, and enabled BigQuery/Cloud Trace observability.
+
+![Roamstead live landing page](readme-assets/01-home.webp)
+
+## Why it is a Collaborative Partner
+
+The agent leads the process by measuring uncertainty, asking the next useful question, proposing a typed change, remembering prior feedback, and planning follow-up work. The user remains the authority over every state-changing decision.
+
+![Roamstead collaborative user-agent loop](readme-assets/collaboration-loop.svg)
+
+The collaboration contract is explicit:
+
+- Hard filters—budget, bedrooms, bathrooms, and property type—are deterministic and cannot be changed by a model.
+- Lifestyle weights can change only through a visible proposal and human decision.
+- Semantic memory is profile-isolated and advisory; it never becomes a hard filter or Fit Score input.
+- Decision Watch requires approval before any external verification tool runs.
+- Failed providers preserve the latest verified snapshot and mark missing or contradictory facts `UNKNOWN`; the system does not invent replacements.
+
+## Product walkthrough
+
+| Decision profile and adaptive clarification | Ranked real listings and map |
+|---|---|
+| ![Editable decision profile and adaptive question](readme-assets/02-decision-profile.webp) | ![Personalized property results and Google Map](readme-assets/03-ranked-listings-map.webp) |
+
+| Property-level evidence | Live multi-agent progress |
+|---|---|
+| ![Property detail with Fit Score and provenance](readme-assets/04-property-evidence.webp) | ![Live Decision Brief agent execution](readme-assets/05-live-agent-run.webp) |
+
+| Persisted model trace | Reloadable final brief |
+|---|---|
+| ![Persisted model event trace](readme-assets/06-persisted-model-trace.webp) | The final brief preserves confirmed, inferred, and unknown claims; retrieved memory; both Gemma audits; verification questions; next actions; and the complete public trace. |
+
+## Multi-model agent workflow
+
+Google ADK defines the durable `PartnerCoordinator` workflow. Function nodes lock the profile version and three listing IDs before model execution. Public SSE events contain action summaries, typed outputs, timings, statuses, and recoverable errors—not hidden reasoning.
+
+![Google ADK PartnerCoordinator workflow](readme-assets/agent-workflow.svg)
+
+| Stage | Model or tool | Responsibility | Failure behavior |
+|---|---|---|---|
+| Profile lock and Fit Scores | Deterministic functions | Freeze inputs, enforce hard gates, calculate inspectable scores | Request fails before model execution if inputs are invalid |
+| SemanticMemoryTool | `gemini-embedding-001` | Retrieve at most five profile-isolated memories from a 768-dimensional Firestore cosine index | Run is marked degraded; approved profile remains authoritative |
+| ListingAnalyst | `gemini-3.5-flash` | Compare the bounded evidence packet with approved preferences | Persisted degraded event; deterministic evidence remains available |
+| VisualEvidenceCritic | `gemma-4-26b-a4b-it` | Audit exact listing photos and challenge unsupported visual claims | Independent branch records failure; run cannot count as successful additional-model proof |
+| MemoryConsistencyCritic | `gemma-4-31b-it` | Audit the public comparison against approved preferences and retrieved memory | Independent branch records failure; no profile mutation |
+| CriticJoin | Deterministic ADK node | Wait for both parallel critics | Does not release verification early |
+| EvidenceVerifier | `gemini-3.5-flash` | Check claim support and route one bounded correction if required | At most one correction with the same evidence and profile |
+| BriefComposer | `gemini-3.5-flash` | Compose confirmed/inferred/unknown findings and next actions | Brief is persisted only with its run and event trace |
+
+### Additional Google AI models
+
+- **Gemma 4 26B** is a multimodal product-level critic over exact real listing photos.
+- **Gemma 4 31B** independently checks memory and approved-profile consistency.
+- **Veo 3.1 Lite** generates one eight-second orientation for each supported city.
+- **Gemini 3.1 Flash TTS** generates the factual narration paired with each orientation.
+- **Gemini Embedding 001** powers profile-isolated semantic decision memory.
+
+City media is generated once, hashed, stored in Cloud Storage, recorded in Firestore, and served on future visits without another generation call. It is labeled as generated orientation and is never eligible as property evidence.
+
+## Google Cloud architecture
+
+The deployed system uses direct Cloud Run URLs; it does not claim undeployed DNS, load-balancing, or Cloud Armor resources.
+
+![Roamstead deployed Google Cloud architecture](infra/roamstead-google-cloud-architecture.svg)
+
+### Runtime components
+
+| Layer | Deployed component |
+|---|---|
+| Web | Next.js 16 on `roamstead-web` Cloud Run; server-side REST/SSE proxy; Google Maps JavaScript and Geocoding APIs |
+| API | FastAPI on `roamstead-api` Cloud Run; Google ADK 2 and Google GenAI SDK |
+| Models | Gemini 3.5 Flash, Gemini Embedding 001, Gemma 4 26B, Gemma 4 31B, Veo 3.1 Lite, Gemini 3.1 Flash TTS |
+| State | Firestore Native for profiles, listings, revisions, feedback, semantic memory, proposals, agent runs/events, briefs, watches, and evidence revisions |
+| Media | Private Cloud Storage for validated listing photographs, persisted city orientations, and evaluation artifacts |
+| Security | Secret Manager for Gemini credentials; restricted browser key for Google Maps; service-account IAM between workloads |
+| Async work | Cloud Run Job for bounded weekly maintenance and approved watches; separate manual evaluation job; Pub/Sub completion/failure events |
+| Observability | Redacted BigQuery agent analytics plus Cloud Trace IDs and phase timing |
+| Delivery | GitHub-triggered Cloud Build, Artifact Registry images tagged by commit SHA, Cloud Run deployment, then public health checks |
+
+The weekly Cloud Scheduler trigger remains paused until a bounded refresh confirms the cost envelope. The application and API are independently deployed and scale to zero.
+
+## CI/CD and production proof
+
+Every push to `main` triggers [cloudbuild.yaml](cloudbuild.yaml). API and web checks run in parallel; passing builds create commit-tagged API and web containers, push them to Artifact Registry, deploy the existing Cloud Run services, and verify both public endpoints.
+
+![Roamstead CI/CD and runtime proof pipeline](readme-assets/cicd-proof.svg)
+
+| Cloud Build | Cloud Run observability |
+|---|---|
+| ![Successful GitHub-triggered Cloud Build](readme-assets/07-cloud-build.webp) | ![Cloud Run production metrics](readme-assets/08-cloud-run-observability.webp) |
+
+| Firestore state | Persisted model event proof |
+|---|---|
+| ![Firestore collections and persisted state](readme-assets/09-firestore-state.webp) | ![Firestore model execution events](readme-assets/10-model-event-proof.webp) |
+
+For an operator with Google Cloud access, the strict production proof script requires deployment health, expected models, three consecutive non-degraded briefs, the persisted evaluation report, Firestore vector index, Pub/Sub, Storage, and both Cloud Run jobs:
+
+```powershell
+./infra/run-production-proof.ps1 -ProjectId roamstead-506707 -Region us-central1
+```
+
+## Real data and evidence policy
+
+| Market | Buy | Rent | Source | Serving behavior |
 |---|---:|---:|---|---|
-| Ho Chi Minh City, Vietnam | 100 | 100 | Batdongsan | Cached in Firestore and Cloud Storage |
-| Bangkok, Thailand | 10 | 10 | PropertyHub | Cached in Firestore and Cloud Storage |
-| Kuala Lumpur, Malaysia | 10 | 10 | PropertyGenie | Cached in Firestore and Cloud Storage |
+| Ho Chi Minh City, Vietnam | 100 | 100 | Batdongsan | Grounded discovery, verified source pages/photos, cached in Firestore and Cloud Storage |
+| Bangkok, Thailand | 10 | 10 | PropertyHub | One-time normalized source snapshot, served from persisted catalog |
+| Kuala Lumpur, Malaysia | 10 | 10 | PropertyGenie | One-time normalized source snapshot, served from persisted catalog |
 
-All 240 listings are persisted before browsing. Bangkok and Kuala Lumpur searches query the saved catalog only; they do not trigger model calls or live web discovery. Prices are shown in USD, source provenance is retained, and photographs are served through Roamstead rather than linking visitors to another property site.
+All 240 publishable listings are persisted before browsing. Visitor searches read the saved catalog and do not trigger model discovery. Every accepted listing requires a numeric source price, a valid source page, retrievable image bytes, and a non-duplicate photo hash. Presentation fields are normalized into English; USD values are calculated server-side from the reported local price. Source provenance and observation timestamps are retained. There is no synthetic listing fallback.
 
-**30-second proof:** reject two properties for the same underlying reason using different notes, approve the resulting preference proposal, and watch the stored profile version and real-property ranking change while budget, property type, bedrooms, and bathrooms remain locked.
+Real-estate content and photographs remain the property of their respective publishers and rights holders. Roamstead retains source attribution and uses the material only within the project’s evaluation workflow; anyone operating a public or commercial deployment is responsible for confirming source permissions and terms.
 
-The profile selector also includes three generate-once city orientations. `veo-3.1-lite-generate-preview` supplies an eight-second visual overview and `gemini-3.1-flash-tts-preview` narrates a factual market brief. The six private media objects and their model IDs, hashes, timestamps, and readiness states are persisted in Cloud Storage and Firestore, so browsing never triggers another generation call. Every preview is explicitly labeled as generated orientation and is ineligible for property evidence.
+## Features and functionality
 
-## Claim → live proof → code location
+- Buy and Rent are first-class modes with mode-specific budgets, evidence language, and action plans.
+- Six editable lifestyle preferences produce an inspectable Fit Score breakdown after hard filtering.
+- Counterfactual ranking selects one high-information clarification rather than following a scripted chat.
+- Two semantically related rejections can create a typed revision proposal; only approval changes the versioned profile and ranking.
+- Profile-isolated semantic memory stores clarification answers, feedback, proposal decisions, and approved revisions.
+- Exactly three properties become a durable Decision Brief with resumable database-first SSE progress.
+- Parallel Gemma critics independently audit visual evidence and memory consistency before verification.
+- Decision Watch uses ADK to choose the smallest useful due-diligence tool set, pauses for approval, then appends immutable evidence revisions.
+- Real Google Maps pins, clustering, and property selection cover the complete filtered result set.
+- Generated city orientations are persisted once and kept completely separate from property evidence.
 
-| Submission claim | Live proof | Code location |
-|---|---|---|
-| Approval-gated learning mutates decision state | Two related rejections create a proposal; only Accept changes profile version and ranking | [`main.py`](apps/api/app/main.py), [`semantic_memory.py`](apps/api/app/semantic_memory.py), [`page.tsx`](apps/web/app/page.tsx) |
-| Real-data-only property catalog | Search returns source provenance, USD normalization, locally/Cloud-served images, and `demo=false` across all three markets | [`live_search.py`](apps/api/app/listings/live_search.py), [`repository.py`](apps/api/app/listings/repository.py) |
-| ADK executes the workflow, not UI timers | Live SSE trace distinguishes function/model nodes, parallel groups, join, router, and persisted results | [`decision_briefs.py`](apps/api/app/decision_briefs.py), [`agent.py`](apps/api/app/agent.py) |
-| Two independent Gemma critics | Gemma 26B and Gemma 31B start in parallel, then `CriticJoin` releases verification | [`gemma_critic.py`](apps/api/app/gemma_critic.py), [`memory_critic.py`](apps/api/app/memory_critic.py) |
-| Relevant video and speech models | City selection plays a persisted Veo orientation and Gemini TTS market brief; neither asset can enter property evidence | [`city_orientations.py`](apps/api/app/city_orientations.py), [`generate_city_orientations.py`](apps/api/scripts/generate_city_orientations.py) |
-| Efficient semantic decision memory | Profile-isolated 768d cosine KNN returns a five-record, 6,000-character bounded packet | [`semantic_memory.py`](apps/api/app/semantic_memory.py), [`cloud.py`](apps/api/app/cloud.py) |
-| Consequential action beyond retrieval | DueDiligencePlanner creates a bounded plan; approval runs tools and persists immutable EvidenceRevisions | [`decision_watches.py`](apps/api/app/decision_watches.py), [`process_decision_watches.py`](apps/api/scripts/process_decision_watches.py) |
-| Measured release quality | `/api/v1/evaluations/latest` exposes a persisted 20-case report only after hard gates and thresholds pass | [`evaluation.py`](apps/api/app/evaluation.py), [`run_agent_evaluation.py`](apps/api/scripts/run_agent_evaluation.py) |
-| Reproducible production proof | One command requires three consecutive non-degraded briefs, all model outputs, the 20-case evaluation, and strict deployment verification | [`run-production-proof.ps1`](infra/run-production-proof.ps1) |
-| Diagram matches deployment | Judge diagram excludes undeployed DNS/LB/Armor and labels the scheduler paused | [`ARCHITECTURE.md`](infra/ARCHITECTURE.md), [`ROAMSTEAD_GCP_ARCHITECTURE_DIAGRAM.md`](infra/ROAMSTEAD_GCP_ARCHITECTURE_DIAGRAM.md) |
+## Reproducible local setup
 
-Buy and Rent are first-class modes. Buy uses a $175,000 purchase ceiling; Rent uses a $1,500 monthly ceiling, monthly neighborhood/listing prices, lease-oriented verification language, and a rental-specific action plan.
+### Prerequisites
 
-Property inventory is real-data-only. Ho Chi Minh City's resumable weekly builder uses Gemini with grounded Google Search to discover Batdongsan listing pages, then uses Gemini Image Search against each exact page. Gemini translates presentation fields into English. Before a result is accepted, the API requires a numeric source price, a valid source page, retrievable image bytes, and a photo hash that is not already in the catalog. A separate exact-listing gallery pass can collect additional search-indexed property photographs while rejecting documents, floor plans, maps, graphics, renderings, and duplicates. Bangkok and Kuala Lumpur use one-time normalized source snapshots from PropertyHub and PropertyGenie; their listings are stored in Firestore and never refreshed during a visitor search. A listing is publishable once its real source photo is validated. Additional verified photos appear in its gallery when available. Validated photos are downloaded into `data/listing_images` and served through Roamstead `/api/v1/listing-images/...` URLs; the UI never links users to an external photo host. USD is calculated server-side from the reported local price and is the only price displayed in the UI. Validated batches are upserted incrementally into the local SQLite database at `data/roamstead.db`, so page loads never spend another model request and a partial build survives restarts. Automatic HCMC refresh attempts are limited to one per seven-day window, including after provider failures. The HCMC catalog targets 100 publishable Buy and 100 publishable Rent properties, including at least 20 each in the Low, Medium, and High bands. Failed search and image calls use bounded retries and backoff within that weekly job. Successful complete refreshes are also mirrored to Firestore when Google Cloud Application Default Credentials are available. The listing API has no synthetic fallback.
+- Git
+- Python 3.11 or newer
+- Node.js 22 and npm
 
-Property fit is calculated at request time for the active Decision Profile, never stored as a universal property fact and never assigned by Gemini. USD budget, minimum bedrooms, minimum bathrooms, and the selected Apartment/House categories are hard filters: a property that misses one is excluded. The remaining real listings are ranked from six editable lifestyle preferences: healthcare, remote-work readiness, waterfront access, quiet surroundings, international-school access, and food/daily-needs proximity. Those weights produce an inspectable breakdown and plain-English reasons on every property. Users can reopen **Decision profile** or **Edit profile** at any time; saving immediately recalculates and reorders all listings.
+Google credentials are optional for the deterministic local path. Without them, the UI and tests use the local adapter and verified cached behavior; a run must not be presented as live model-integration proof unless its persisted events show successful model outputs.
 
-The golden demo visibly proves the core collaboration loop:
+### 1. Clone and configure
 
-1. Choose Buy or Rent and describe the HCMC move.
-2. Confirm budget, household space, property category, and lifestyle priorities in the editable Decision Profile.
-3. The deterministic counterfactual tool tests possible preference changes against the qualified real catalog. `PreferenceInterpreter` asks exactly one high-information clarification based on the two changes that would alter the current top 10 most.
-4. Choose an answer. It creates a typed proposal with predicted rank impact; accept, soften, or reject it. Nothing changes silently.
-5. Load the real cached Batdongsan catalog without spending another discovery call and inspect personalized Fit Scores, English presentation, USD prices, local imagery, and source provenance.
-6. Reject properties with a concrete reason. Two consistent signals create another typed preference proposal.
-7. See the property ranking before and after an approved revision.
-8. Select exactly three real properties and create a durable Decision Brief.
-9. Watch the database-first stream run `SemanticMemoryTool (Gemini Embedding) -> ListingAnalyst (Gemini) -> VisualEvidenceCritic (Gemma 26B) -> MemoryConsistencyCritic (Gemma 31B) -> EvidenceVerifier (Gemini) -> BriefComposer (Gemini)`, with exactly one bounded correction pass when either critic challenges a claim.
-10. Review confirmed, inferred, and unknown claims, retrieved decision memory, both Gemma audits, questions, and next actions. Reload and restore the same brief and completed trace from the database.
-11. Create a property-specific Decision Watch. Inspect the tools selected by ADK, approve the plan, and see immutable before/after evidence revisions without any profile or Fit Score mutation.
+```powershell
+git clone https://github.com/vvdotcom/Roamstead.git
+cd Roamstead
+Copy-Item .env.example .env
+```
 
-## Run locally
+The checked-in example defaults to SQLite and does not contain secrets. Keep `ENABLE_ADK_AGENT=0` for credential-free local use. To exercise live models, set `GEMINI_API_KEY` only in the ignored `.env` file and set `ENABLE_ADK_AGENT=1`.
 
-In one terminal:
+### 2. Start the API
 
 ```powershell
 cd apps/api
-python -m pip install -e ".[dev]"
-python -m uvicorn app.main:app --reload --port 8000
+py -m pip install -e ".[dev]"
+py -m uvicorn app.main:app --reload --port 8000
 ```
 
-In another:
+Verify [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health).
+
+### 3. Start the web app
+
+In a second terminal from the repository root:
 
 ```powershell
 cd apps/web
-npm install
+npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open [http://localhost:3000](http://localhost:3000). The Next.js proxy defaults to `http://127.0.0.1:8000`.
 
-### Google Maps property view
-
-The results screen includes a Google Map on the right for the complete filtered property set. It geocodes each real listing's saved source address, clusters dense pins, displays the profile Fit Score on each marker, and opens the associated property when selected.
+### 4. Optional Google Maps setup
 
 Copy `apps/web/.env.local.example` to `apps/web/.env.local`, then set:
 
@@ -86,73 +229,77 @@ NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=YOUR_RESTRICTED_BROWSER_KEY
 NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=YOUR_OPTIONAL_MAP_ID
 ```
 
-Enable **Maps JavaScript API** and **Geocoding API**. Because a browser Maps key is intentionally visible to clients, restrict it to those APIs and to `http://localhost:3000/*` plus the production website origin. Restart `npm run dev` after changing the key. Geocoded coordinates are cached only in that browser and expire after 29 days.
+Enable Maps JavaScript API and Geocoding API. Restrict the browser key to those APIs and the exact local/production HTTP referrers. Restart the web server after changing the key.
 
-To resume a gallery backfill without re-querying completed listings:
-
-```powershell
-cd apps/api
-python scripts/backfill_galleries.py --mode RENT
-python scripts/backfill_galleries.py --mode BUY
-```
-
-## Verify
+### 5. Verify the repository
 
 ```powershell
 cd apps/api
-python -m pytest -q
+py -m pytest -q
 
 cd ../web
+npm test
 npm run build
 ```
 
-## Architecture
-
-The judge-facing production diagram and trust boundaries are in [infra/ARCHITECTURE.md](infra/ARCHITECTURE.md). It shows only deployed resources: direct Cloud Run web/API services, Firestore and its vector index, Cloud Storage, Secret Manager, Pub/Sub, BigQuery Agent Analytics, Cloud Trace, and two scale-to-zero jobs. Google ADK defines a `PartnerCoordinator` workflow with parallel Gemma critic branches and a deterministic join/correction router. Deterministic tools own counterfactual ranking, database access, profile revisions, source checks, and Fit Scores.
-
-Local development persists listings, profiles, revisions, feedback, proposals, semantic-memory records, saved properties, agent runs/events, and Decision Briefs in `data/roamstead.db`. The browser remembers the active profile ID and restores the same decision state after a reload. Local semantic search uses the same 768-dimensional stored vectors and cosine-distance rules as production; tests may inject deterministic fixture vectors.
-
-In production, set `PERSISTENCE_BACKEND=firestore`. Cloud Run cold instances hydrate state from Firestore; permissioned photos are served from Cloud Storage. The weekly maintenance Cloud Run Job processes approved Decision Watches and refreshes due real catalog snapshots in the same bounded execution, writing Firestore/Storage state and publishing completion or failure through Pub/Sub. Its Cloud Scheduler trigger remains paused until one measured run confirms the cost envelope. Secret Manager supplies Gemini credentials, and the browser never receives or invokes them.
-
-When `ENABLE_ADK_AGENT=1` and credentials are configured, the adaptive question is phrased by a real Gemini/ADK `PreferenceInterpreter` from deterministic counterfactual results. Decision Brief creation returns HTTP 202 with a durable `QUEUED` run immediately. The browser opens a full progress workspace and then its dedicated Next.js SSE proxy, which starts execution and receives each database-persisted tool/specialist event while the run is active. Event sequence IDs support reconnect and resume without rerunning completed checkpoints.
-
-Gemma 4 is integrated as the multimodal `VisualEvidenceCritic` between Gemini analysis and verification. It receives the deterministic packet, the public analyst claims, and one or two exact-listing photos read from Roamstead's local cache. Its typed audit classifies each photo as interior, exterior, floor plan, document, or unknown; lists only observable features; flags unsupported claims and inadequate evidence; and proposes verification questions. It cannot alter Fit Scores, filters, prices, or preferences. With the existing API key it uses hosted `gemma-4-26b-a4b-it`; set `GEMMA_CRITIC_URL` to use private Cloud Run vLLM. A failure creates a persisted degraded event, and that run cannot be presented as proof of successful Gemma integration. Success is proven by the persisted property-specific audit and model ID, not the health endpoint alone.
-
-Semantic decision memory uses `gemini-embedding-001` with 768-dimensional vectors. Feedback notes, clarification answers, proposal decisions, and approved profile revisions are embedded as retrieval documents. New agent queries use retrieval-query embeddings, are isolated by profile, and retrieve at most five records with cosine distance no greater than `0.30` into a 6,000-character packet. Firestore native vector search is the production path; the deployment script creates the required vector index. Embeddings are never returned by the public memory API and never participate in hard filters, ordering, preference weights, or deterministic Fit Scores. A failed embedding remains `PENDING_EMBEDDING` for backfill while the deterministic workflow continues.
-
-`gemma-4-31b-it` is integrated as `MemoryConsistencyCritic` after the visual audit. It checks Gemini's public analysis against the approved profile and compact semantic-memory packet, identifies conflicts, superseded preferences, unsupported assumptions, and omitted tradeoffs, and may request the same single bounded correction used by the visual critic. It cannot mutate the user profile or evidence. A non-degraded run persists the embedding packet plus successful typed outputs from both Gemma critics and records all model IDs in the live trace and final brief.
+The API suite currently collects 52 tests. Browser golden-flow scripts are in `tests/e2e` and cover clarification, approval-only reranking, model evidence, persistence, maps, expansion markets, and city orientations.
 
 ## Deploy to Google Cloud
 
-Use [GOOGLE_CLOUD_DEPLOYMENT_PLAN.md](GOOGLE_CLOUD_DEPLOYMENT_PLAN.md) as the authoritative preflight, deployment, verification, and rollback runbook.
-
-Prerequisites are a billing-enabled project, a default Native-mode Firestore database, the Google Cloud CLI, and a Secret Manager secret named `roamstead-gemini-api-key`. Then run:
+Prerequisites are a billing-enabled Google Cloud project, Google Cloud CLI authentication, a default Firestore database in Native mode, and a Secret Manager secret named `roamstead-gemini-api-key` with an enabled version. Never pass that key on a command line or commit it.
 
 ```powershell
 $env:ROAMSTEAD_MAPS_BROWSER_API_KEY="YOUR_RESTRICTED_BROWSER_KEY"
 $env:ROAMSTEAD_MAPS_MAP_ID="YOUR_OPTIONAL_MAP_ID"
-.\infra\deploy-cloud-run.ps1 -ProjectId YOUR_PROJECT_ID -Region us-central1
+./infra/deploy-cloud-run.ps1 -ProjectId YOUR_PROJECT_ID -Region us-central1
 ```
 
-The script builds and deploys separate API and web Cloud Run services, creates least-privilege service accounts, a private listing-image bucket, Pub/Sub topic, weekly catalog Cloud Run Job, and Cloud Scheduler trigger. It intentionally refuses to choose a Firestore location or place a Gemini key on the command line.
+The deployment script enables required APIs, creates least-privilege service accounts, Artifact Registry, Storage, Pub/Sub, Firestore vector index, BigQuery analytics, Cloud Run services/jobs, and the paused scheduler trigger. It refuses to choose a Firestore location or accept a Gemini key on the command line.
 
-### Automatic deployment
-
-Pushes to `main` run [cloudbuild.yaml](cloudbuild.yaml). The pipeline runs the API and web tests, builds commit-tagged containers, pushes them to the `roamstead` Artifact Registry repository, deploys both existing Cloud Run services, and checks the public API and web URLs. It uses the dedicated `roamstead-builder` service account and reads the browser-restricted Maps key from the `roamstead-maps-browser-key` Secret Manager secret. Runtime configuration and the Gemini credential remain attached to the existing Cloud Run services and are not stored in the repository.
-
-The default deployment uses hosted Gemma 4 through the same Secret Manager API key. For the additional-model Cloud Run proof, deploy a private GPU-backed Gemma service and connect the API identity:
+To connect a private GPU-backed Gemma service instead of the hosted model endpoint:
 
 ```powershell
-.\infra\deploy-gemma-critic.ps1 -ProjectId YOUR_PROJECT_ID -Region us-central1
+./infra/deploy-gemma-critic.ps1 -ProjectId YOUR_PROJECT_ID -Region us-central1
 ```
 
-This script follows Google Cloud's official [Gemma 4 with ADK on Cloud Run guide](https://docs.cloud.google.com/run/docs/run-gemma-on-cloud-run), keeps the inference endpoint private, and grants only `roamstead-api` the invoker role. Cloud Run GPU quota and billing are required.
+## Security, privacy, and trust boundaries
 
-## Trust boundaries
+- `.env`, logs, local databases, generated media, and temporary artifacts are ignored; secrets stay in Secret Manager in production.
+- The browser receives only the intentionally public, API/referrer-restricted Maps key—never the Gemini credential.
+- Function nodes own hard filters, Fit Scores, profile mutation, evidence-state transitions, approval, and persistence.
+- Models receive bounded evidence packets and cannot directly write profile state, prices, scores, filters, or source facts.
+- Semantic retrieval is filtered by profile before cosine search, capped at five records and 6,000 characters, and embeddings are not returned by the public API.
+- BigQuery analytics are metadata-only: no prompts, profiles, vectors, private reasoning, or listing content.
+- Public activity is an action trace with typed results, not chain-of-thought.
+- Housing and ownership guidance is decision support, not legal, financial, tax, or inspection advice; consequential unknowns remain visible and require professional verification.
 
-- Rankings are computed from inspectable weights; Gemini never assigns the score.
-- A repeated behavior creates a proposal, not a silent profile mutation.
-- Listings are accepted only when Gemini returns a grounded Batdongsan source; no synthetic fallback is used.
-- Every brief claim retains a status, source URL, observed timestamp, and user-facing explanation.
-- Public activity is a concise action trace, not hidden chain-of-thought.
-- The Vietnam ownership card links to the official government legal-document portal, shows a check date and confidence, and requires professional verification before a deposit.
+## Hackathon requirement map
+
+| Official requirement or criterion | Roamstead evidence |
+|---|---|
+| Gemini 3.5 or newer | `gemini-3.5-flash` runs the analyst, verifier, composer, and preference phrasing through the Gemini API |
+| Google agent framework | Google ADK 2 defines `PartnerCoordinator`, parallel branches, join, bounded router, tool nodes, resumable run state, and public event flow |
+| Google Cloud infrastructure | Cloud Run, Firestore/vector search, Cloud Storage, Secret Manager, Artifact Registry, Cloud Build, Pub/Sub, BigQuery, and Cloud Trace |
+| Collaborative Partner | Agent-led clarification and planning; user approval; versioned feedback memory; step-by-step guidance and adaptation |
+| Innovation & Operational Utility — 40% | Converts unstructured cross-border property evidence into ranked decisions, then performs approval-gated due diligence beyond retrieval |
+| Architectural Discipline & Tech Stack — 30% | Decoupled web/API/jobs, durable run state, typed scoped tools, parallel critics, explicit degradation, bounded retries, secret isolation, resumable SSE |
+| Demo & Production Readiness — 30% | Public live app, health endpoint, repo-hosted architecture, reproducible setup, CI/CD, real screenshots, Cloud Run/Firestore proof, and a public 3:52 narrated/subtitled demo |
+| Additional Google AI models | Gemma 4 26B, Gemma 4 31B, Veo 3.1 Lite, Gemini TTS, and Gemini Embedding integrations are visible in persisted state and model traces |
+
+The final demonstration video is intentionally kept out of the code repository and [published publicly on YouTube](https://youtu.be/A_titwNpt28). The 3:52 English-narrated, subtitled demo includes the problem, value proposition, live execution, Cloud Build, Cloud Run, Firestore, and model-event proof.
+
+## Project provenance, dependencies, and disclosures
+
+The repository’s first commit is dated August 26, 2026, within the All Things Agentic Hackathon submission period. The project uses standard open-source frameworks and libraries declared in `apps/api/pyproject.toml` and `apps/web/package.json`; each dependency remains governed by its own license. Google Cloud, Gemini API, Google Maps Platform, property publishers, and GitHub are third-party services governed by their respective terms.
+
+No secrets, private credentials, local `.env` values, final demo video, narration audio, generated music, subtitle working files, or temporary production assets are tracked in this repository.
+
+## Findings and learnings
+
+- A collaborative agent is more trustworthy when it proposes measured state changes and waits for approval than when it silently “personalizes” a profile.
+- Parallel critics are useful only when their starts, outputs, join, failures, model IDs, and timings are durable and inspectable.
+- Property evidence needs explicit `CONFIRMED`, `INFERRED`, and `UNKNOWN` states; fluent prose is not provenance.
+- Semantic memory should retrieve compact advisory context, not become an invisible scoring feature.
+- Returning HTTP 202 before a long model workflow and persisting every event before SSE emission makes Cloud Run execution reconnectable without replaying completed work.
+- Generate-once media lowers cost and latency while hashes, model IDs, timestamps, and labeling keep generated orientation separate from factual property evidence.
+- Production proof is strongest when the same release pipeline tests, versions, deploys, health-checks, and leaves durable runtime evidence.
